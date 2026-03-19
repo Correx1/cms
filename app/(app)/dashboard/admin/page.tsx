@@ -1,38 +1,70 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client"
 
-import { mockProjects } from "@/lib/mock/projects"
-import { mockClients } from "@/lib/mock/clients"
-import { mockStaff } from "@/lib/mock/staff"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Plus, Users, FolderKanban, CheckCircle2, Clock, Calendar, Activity, ExternalLink } from "lucide-react"
+import { Plus, Users, FolderKanban, CheckCircle2, Clock, Calendar, Activity, ExternalLink, Loader2 } from "lucide-react"
 import Link from "next/link"
+import { useEffect, useState } from "react"
+import { createClient } from "@/lib/supabase/client"
 
 export default function AdminDashboard() {
-  const totalProjects = mockProjects.length
-  const activeProjects = mockProjects.filter(p => p.status === "active").length
-  const completedProjects = mockProjects.filter(p => p.status === "completed").length
-  const totalClients = mockClients.length
+  const supabase = createClient()
+  
+  const [loading, setLoading] = useState(true)
+  const [totalProjects, setTotalProjects] = useState(0)
+  const [activeProjects, setActiveProjects] = useState(0)
+  const [completedProjects, setCompletedProjects] = useState(0)
+  const [totalClients, setTotalClients] = useState(0)
+  const [sortedProjects, setSortedProjects] = useState<any[]>([])
 
-  // Sort all projects by deadline ascending
-  const sortedProjects = [...mockProjects].sort((a, b) => new Date(a.deadline).getTime() - new Date(b.deadline).getTime())
+  useEffect(() => {
+    let mounted = true
+    async function fetchData() {
+      // Execute robust native counts across tables heavily bypassing massive GET requests safely
+      const { count: clientsCount } = await supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('role', 'client')
+      const { count: projCount } = await supabase.from('projects').select('*', { count: 'exact', head: true })
+      const { count: actCount } = await supabase.from('projects').select('*', { count: 'exact', head: true }).eq('status', 'active')
+      const { count: compCount } = await supabase.from('projects').select('*', { count: 'exact', head: true }).in('status', ['completed', 'approved'])
+
+      // Extract precise table joins linking Relational IDs explicitly mapping Staff and Clients
+      const { data: upcoming } = await supabase
+        .from('projects')
+        .select(`
+          id, title, status, deadline,
+          client:profiles!projects_client_id_fkey(name),
+          project_assignments(profiles(name))
+        `)
+        .order('deadline', { ascending: true })
+        .limit(10)
+
+      if (mounted) {
+        setTotalClients(clientsCount || 0)
+        setTotalProjects(projCount || 0)
+        setActiveProjects(actCount || 0)
+        setCompletedProjects(compCount || 0)
+        if (upcoming) setSortedProjects(upcoming)
+        setLoading(false)
+      }
+    }
+    fetchData()
+    return () => { mounted = false }
+  }, [supabase])
 
   const getStatusIcon = (status: string) => {
     switch(status) {
       case "completed": return <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+      case "approved": return <CheckCircle2 className="h-4 w-4 text-indigo-500" />
       case "active": return <Activity className="h-4 w-4 text-blue-500" />
       default: return <Clock className="h-4 w-4 text-yellow-500" />
     }
   }
 
-  const getAssignedStaffNames = (staffIds: string[]) => {
-    if (!staffIds || staffIds.length === 0) return "None"
-    return staffIds
-      .map(id => mockStaff.find(s => s.id === id)?.name)
-      .filter(Boolean)
-      .join(", ")
+  const getAssignedStaffNames = (assignments: any[]) => {
+    if (!assignments || assignments.length === 0) return "None"
+    return assignments.map((a: any) => a.profiles?.name).filter(Boolean).join(", ")
   }
 
   return (
@@ -56,125 +88,136 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      {/* Stat Cards */}
-      <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
-        <Card className="shadow-sm hover:shadow-md transition-all border-border/50">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Projects</CardTitle>
-            <FolderKanban className="h-4 w-4 text-muted-foreground hidden sm:block" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-xl md:text-2xl font-bold">{totalProjects}</div>
-            <p className="text-xs text-muted-foreground mt-1">Across all clients</p>
-          </CardContent>
-        </Card>
-        <Card className="shadow-sm hover:shadow-md transition-all border-border/50">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Active Projects</CardTitle>
-            <Activity className="h-4 w-4 text-blue-500 hidden sm:block" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-xl md:text-2xl font-bold">{activeProjects}</div>
-            <p className="text-xs text-muted-foreground mt-1">Currently in progress</p>
-          </CardContent>
-        </Card>
-        <Card className="shadow-sm hover:shadow-md transition-all border-border/50">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Completed</CardTitle>
-            <CheckCircle2 className="h-4 w-4 text-emerald-500 hidden sm:block" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-xl md:text-2xl font-bold">{completedProjects}</div>
-            <p className="text-xs text-muted-foreground mt-1">Successfully delivered</p>
-          </CardContent>
-        </Card>
-        <Card className="shadow-sm hover:shadow-md transition-all border-border/50">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Clients</CardTitle>
-            <Users className="h-4 w-4 text-muted-foreground hidden sm:block" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-xl md:text-2xl font-bold">{totalClients}</div>
-            <p className="text-xs text-muted-foreground mt-1">Active client accounts</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Priority Project Tracking Table */}
-      <Card className="shadow-sm border-border/50">
-        <CardHeader className="border-b border-border/50 bg-muted/20">
-          <CardTitle className="text-xl font-bold flex items-center gap-2">
-            <Calendar className="h-5 w-5 text-primary" /> Active Project Priorities
-          </CardTitle>
-          <CardDescription className="text-base">All projects sorted by approaching deadlines</CardDescription>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader className="bg-muted/10">
-                <TableRow>
-                  <TableHead className="pl-6 w-[250px] py-4 text-sm">Project & Client</TableHead>
-                  <TableHead className="py-4 text-sm">Status</TableHead>
-                  <TableHead className="py-4 text-sm hidden md:table-cell">Assigned Staff</TableHead>
-                  <TableHead className="py-4 text-sm">Deadline Tracker</TableHead>
-                  <TableHead className="pr-6 text-right py-4 text-sm">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {sortedProjects.length > 0 ? sortedProjects.map(project => {
-                  const client = mockClients.find(c => c.id === project.clientId)
-                  const daysLeft = Math.ceil((new Date(project.deadline).getTime() - new Date().getTime()) / (1000 * 3600 * 24))
-                  
-                  return (
-                    <TableRow key={project.id} className="group hover:bg-muted/30 transition-colors">
-                      <TableCell className="pl-6 py-4">
-                        <div className="space-y-1 content-center">
-                          <p className="font-semibold text-base leading-snug">{project.title}</p>
-                          <p className="text-sm text-primary font-medium">{client?.name}</p>
-                        </div>
-                      </TableCell>
-                      <TableCell className="py-4">
-                        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                          {getStatusIcon(project.status)}
-                          <span className="capitalize font-medium text-sm">{project.status}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell className="py-4 hidden md:table-cell">
-                        <div className="text-sm text-muted-foreground whitespace-nowrap truncate max-w-[200px]">
-                          {getAssignedStaffNames(project.assignedStaffIds)}
-                        </div>
-                      </TableCell>
-                      <TableCell className="py-4">
-                        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                          <Badge variant={daysLeft < 3 ? "destructive" : "secondary"} className="w-fit text-xs px-2 py-0.5">
-                            {daysLeft < 0 ? "Overdue" : `${daysLeft} Days Left`}
-                          </Badge>
-                          <span className="text-sm font-medium text-muted-foreground hidden lg:inline-block">
-                            ({new Date(project.deadline).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })})
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell className="pr-6 py-4 text-right">
-                        <Button variant="ghost" size="sm" className="font-medium h-9 px-3" asChild>
-                          <Link href={`/projects/${project.id}`}>
-                            View <ExternalLink className="ml-2 h-4 w-4" />
-                          </Link>
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  )
-                }) : (
-                  <TableRow>
-                    <TableCell colSpan={5} className="h-32 text-center text-muted-foreground text-base">
-                      No matching projects found.
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
+      {loading ? (
+        <div className="flex items-center justify-center h-64">
+           <Loader2 className="h-8 w-8 text-primary animate-spin" />
+        </div>
+      ) : (
+        <>
+          {/* Stat Cards */}
+          <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+            <Card className="shadow-sm hover:shadow-md transition-all border-border/50">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Total Projects</CardTitle>
+                <FolderKanban className="h-4 w-4 text-muted-foreground hidden sm:block" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-xl md:text-2xl font-bold">{totalProjects}</div>
+                <p className="text-xs text-muted-foreground mt-1">Across all clients</p>
+              </CardContent>
+            </Card>
+            <Card className="shadow-sm hover:shadow-md transition-all border-border/50">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Active Projects</CardTitle>
+                <Activity className="h-4 w-4 text-blue-500 hidden sm:block" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-xl md:text-2xl font-bold">{activeProjects}</div>
+                <p className="text-xs text-muted-foreground mt-1">Currently in progress</p>
+              </CardContent>
+            </Card>
+            <Card className="shadow-sm hover:shadow-md transition-all border-border/50">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Completed</CardTitle>
+                <CheckCircle2 className="h-4 w-4 text-emerald-500 hidden sm:block" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-xl md:text-2xl font-bold">{completedProjects}</div>
+                <p className="text-xs text-muted-foreground mt-1">Successfully delivered</p>
+              </CardContent>
+            </Card>
+            <Card className="shadow-sm hover:shadow-md transition-all border-border/50">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Total Clients</CardTitle>
+                <Users className="h-4 w-4 text-muted-foreground hidden sm:block" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-xl md:text-2xl font-bold">{totalClients}</div>
+                <p className="text-xs text-muted-foreground mt-1">Active client accounts</p>
+              </CardContent>
+            </Card>
           </div>
-        </CardContent>
-      </Card>
+
+          {/* Priority Project Tracking Table */}
+          <Card className="shadow-sm border-border/50">
+            <CardHeader className="border-b border-border/50 bg-muted/20">
+              <CardTitle className="text-xl font-bold flex items-center gap-2">
+                <Calendar className="h-5 w-5 text-primary" /> Active Project Priorities
+              </CardTitle>
+              <CardDescription className="text-base">All projects sorted by approaching deadlines</CardDescription>
+            </CardHeader>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader className="bg-muted/10">
+                    <TableRow>
+                      <TableHead className="pl-6 w-[250px] py-4 text-sm">Project & Client</TableHead>
+                      <TableHead className="py-4 text-sm">Status</TableHead>
+                      <TableHead className="py-4 text-sm hidden md:table-cell">Assigned Staff</TableHead>
+                      <TableHead className="py-4 text-sm">Deadline Tracker</TableHead>
+                      <TableHead className="pr-6 text-right py-4 text-sm">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {sortedProjects.length > 0 ? sortedProjects.map(project => {
+                      const daysLeft = project.deadline ? Math.ceil((new Date(project.deadline).getTime() - new Date().getTime()) / (1000 * 3600 * 24)) : 0
+                      
+                      return (
+                        <TableRow key={project.id} className="group hover:bg-muted/30 transition-colors">
+                          <TableCell className="pl-6 py-4">
+                            <div className="space-y-1 content-center">
+                              <p className="font-semibold text-base leading-snug">{project.title}</p>
+                              <p className="text-sm text-primary font-medium">{project.client?.name || 'Unknown'}</p>
+                            </div>
+                          </TableCell>
+                          <TableCell className="py-4">
+                            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                              {getStatusIcon(project.status)}
+                              <span className="capitalize font-medium text-sm">{project.status}</span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="py-4 hidden md:table-cell">
+                            <div className="text-sm text-muted-foreground whitespace-nowrap truncate max-w-[200px]">
+                              {getAssignedStaffNames(project.project_assignments || [])}
+                            </div>
+                          </TableCell>
+                          <TableCell className="py-4">
+                            {project.deadline ? (
+                              <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                                <Badge variant={daysLeft < 3 ? "destructive" : "secondary"} className="w-fit text-xs px-2 py-0.5">
+                                  {daysLeft < 0 ? "Overdue" : `${daysLeft} Days Left`}
+                                </Badge>
+                                <span className="text-sm font-medium text-muted-foreground hidden lg:inline-block">
+                                  ({new Date(project.deadline).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })})
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">No deadline</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="pr-6 py-4 text-right">
+                            <Button variant="ghost" size="sm" className="font-medium h-9 px-3" asChild>
+                              <Link href={`/projects/${project.id}`}>
+                                View <ExternalLink className="ml-2 h-4 w-4" />
+                              </Link>
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    }) : (
+                      <TableRow>
+                        <TableCell colSpan={5} className="h-32 text-center text-muted-foreground text-base">
+                          No active projects found.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      )}
     </div>
   )
 }

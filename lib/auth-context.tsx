@@ -1,60 +1,102 @@
 "use client"
 
-import React, { createContext, useContext, useState } from "react"
+import React, { createContext, useContext, useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
+import { createClient } from "@/lib/supabase/client"
 
 export type Role = "admin" | "staff" | "client" | null
 
-interface User {
+export interface User {
   id: string
   name: string
   email: string
   role: Role
+  company?: string
+  jobTitle?: string
 }
 
 interface AuthContextType {
   user: User | null
-  login: (email: string) => void
-  logout: () => void
+  loading: boolean
+  logout: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
+  const [loading, setLoading] = useState(true)
   const router = useRouter()
+  const supabase = createClient()
 
-  const login = (email: string) => {
-    // Mock login logic based on email to test different roles
-    let role: Role = "client"
-    let name = "Alice Johnson"
-    let id = "c1" // Maps to TechCorp Inc.
+  useEffect(() => {
+    let mounted = true
 
-    if (email.includes("admin")) {
-      role = "admin"
-      name = "Sarah Admin"
-      id = "s1"
-    } else if (email.includes("staff")) {
-      role = "staff"
-      name = "Mike Developer"
-      id = "s2" // Maps to active mockStaff assignments
+    async function initializeSession() {
+      const { data: { session } } = await supabase.auth.getSession()
+      
+      if (session?.user) {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", session.user.id)
+          .single()
+
+        if (mounted && profile) {
+          setUser({
+            id: session.user.id,
+            email: session.user.email || "",
+            name: profile.name,
+            role: profile.role,
+            company: profile.company,
+            jobTitle: profile.job_title
+          })
+        }
+      }
+      if (mounted) setLoading(false)
     }
 
-    const mockUser = { id, name, email, role }
-    setUser(mockUser)
-    
-    // Redirect based on role
-    router.push(`/dashboard/${role}`)
-  }
+    initializeSession()
 
-  const logout = () => {
-    setUser(null)
-    router.push("/")
+    // Listen natively to any cross-tab login/logout states or JWT refreshes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === "SIGNED_OUT") {
+        setUser(null)
+        router.push("/")
+      } else if (session?.user && event === "SIGNED_IN") {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", session.user.id)
+          .single()
+
+        if (profile) {
+          setUser({
+            id: session.user.id,
+            email: session.user.email || "",
+            name: profile.name,
+            role: profile.role,
+            company: profile.company,
+            jobTitle: profile.job_title
+          })
+          router.push(`/dashboard/${profile.role}`) // Native redirect upon successful login payload
+        }
+      }
+    })
+
+    return () => {
+      mounted = false
+      subscription.unsubscribe()
+    }
+  }, [supabase, router])
+
+  const logout = async () => {
+    await supabase.auth.signOut()
   }
 
   return (
-    <AuthContext.Provider value={{ user, login, logout }}>
-      {children}
+    <AuthContext.Provider value={{ user, loading, logout }}>
+      {!loading && children}
     </AuthContext.Provider>
   )
 }

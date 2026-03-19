@@ -1,21 +1,69 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client"
 
-import { mockClients } from "@/lib/mock/clients"
-import { mockProjects } from "@/lib/mock/projects"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { ArrowLeft, Building2, Mail, Phone, FolderKanban, Edit, CheckCircle2, Clock, Activity } from "lucide-react"
+import { ArrowLeft, Building2, Mail, Phone, FolderKanban, CheckCircle2, Clock, Activity, Loader2 } from "lucide-react"
 import Link from "next/link"
-import { useParams } from "next/navigation"
+import { useParams, useRouter } from "next/navigation"
+import { useState, useEffect } from "react"
+import { createClient } from "@/lib/supabase/client"
 
 export default function ClientProfilePage() {
   const params = useParams()
+  const router = useRouter()
   const clientId = params?.id as string
+  const supabase = createClient()
   
-  // Mock data fetching
-  const client = mockClients.find(c => c.id === clientId) || mockClients[0]
-  const clientProjects = mockProjects.filter(p => p.clientId === client.id)
+  const [loading, setLoading] = useState(true)
+  const [clientProfile, setClientProfile] = useState<any>(null)
+
+  useEffect(() => {
+    let mounted = true
+    const fetchClientData = async () => {
+      const { data } = await supabase
+        .from('profiles')
+        .select(`
+          *,
+          projects (*)
+        `)
+        .eq('id', clientId)
+        .single()
+        
+      if (mounted && data) {
+        setClientProfile(data)
+      }
+      setLoading(false)
+    }
+
+    fetchClientData()
+    return () => { mounted = false }
+  }, [supabase, clientId])
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-[70vh]">
+        <Loader2 className="h-10 w-10 text-primary animate-spin" />
+      </div>
+    )
+  }
+
+  if (!clientProfile) {
+    return <div className="p-8 text-center text-muted-foreground font-semibold">Client Map Execution failed structurally. Identity lost.</div>
+  }
+
+  const clientProjects = clientProfile.projects || []
+  
+  // Calculate total mocked value delivered based on prices 
+  // (Assuming basic string numbers from price input, safely parsing)
+  const totalValue = clientProjects.reduce((acc: number, p: any) => {
+    if (p.price && p.status === "completed") {
+      const num = parseFloat(p.price.toString().replace(/,/g, ''))
+      return acc + (isNaN(num) ? 0 : num)
+    }
+    return acc
+  }, 0)
 
   const getStatusIcon = (status: string) => {
     switch(status) {
@@ -29,106 +77,99 @@ export default function ClientProfilePage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" asChild>
-            <Link href="/clients">
-              <ArrowLeft className="h-5 w-5" />
-              <span className="sr-only">Back to Clients</span>
-            </Link>
+          <Button variant="ghost" size="icon" onClick={() => router.back()}>
+            <ArrowLeft className="h-5 w-5" />
+            <span className="sr-only">Exit Client Vector</span>
           </Button>
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">{client.name}</h1>
-            <p className="text-muted-foreground mt-1 text-sm">Client Profile</p>
+            <h1 className="text-3xl font-bold tracking-tight">{clientProfile.name || "Unknown Identity"}</h1>
+            <p className="text-muted-foreground mt-1 text-sm font-semibold">Physical Identity Block / CRM Mapping Node</p>
           </div>
         </div>
-        <Button variant="outline" className="shadow-sm">
-          <Edit className="mr-2 h-4 w-4" /> Edit Profile
-        </Button>
       </div>
 
       <div className="grid gap-6 md:grid-cols-3">
-        {/* Profile Details */}
         <Card className="md:col-span-1 shadow-sm border-border/50 h-fit">
           <CardHeader>
             <div className="flex items-center gap-4">
-              <div className="h-16 w-16 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-2xl ring-2 ring-primary/20">
-                {client.name.split(" ").map(n => n[0]).join("")}
+              <div className="h-16 w-16 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-2xl ring-2 ring-primary/20 shadow-sm border border-primary/20">
+                {clientProfile.name ? clientProfile.name.split(" ").map((n: string) => n[0]).join("").substring(0, 2) : "CL"}
               </div>
               <div>
-                <CardTitle>{client.company}</CardTitle>
-                <CardDescription className="uppercase mapping-widest text-[10px] tracking-wider mt-1 font-semibold text-primary/70">
-                  Active Client
+                <CardTitle className="font-bold">{clientProfile.company || "Unmapped Corporation"}</CardTitle>
+                <CardDescription className="uppercase text-[10px] tracking-widest mt-1 font-bold text-primary/70">
+                  Global Physical Client
                 </CardDescription>
               </div>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-3 pt-4 border-t border-border/50">
-              <div className="flex items-center gap-3 text-sm">
+              <div className="flex items-center gap-3 text-sm font-semibold">
                 <Mail className="h-4 w-4 text-muted-foreground" />
-                <a href={`mailto:${client.email}`} className="text-primary hover:underline">{client.email}</a>
+                <a href={`mailto:${clientProfile.email}`} className="text-primary hover:underline">{clientProfile.email}</a>
               </div>
-              <div className="flex items-center gap-3 text-sm">
+              <div className="flex items-center gap-3 text-sm font-semibold">
                 <Phone className="h-4 w-4 text-muted-foreground" />
-                <span>{client.phone}</span>
+                <span>{clientProfile.phone || "No signal established"}</span>
               </div>
-              <div className="flex items-center gap-3 text-sm">
+              <div className="flex items-center gap-3 text-sm font-semibold">
                 <Building2 className="h-4 w-4 text-muted-foreground" />
-                <span>{client.company} HQ</span>
+                <span>{clientProfile.company || "No HQ defined"} Base</span>
               </div>
             </div>
             
             <div className="pt-4 border-t border-border/50">
-              <div className="bg-muted/30 p-3 rounded-md border border-border/50">
-                <div className="text-[10px] text-muted-foreground uppercase font-semibold mb-1">Total Value Delivered</div>
-                <div className="text-xl font-bold">$0.00 <span className="text-xs font-normal text-muted-foreground ml-1">(Mock Data)</span></div>
+              <div className="bg-muted/10 p-4 rounded-xl border border-border/50 shadow-sm">
+                <div className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest mb-1">Total Delivery Output</div>
+                <div className="text-2xl font-bold">${totalValue.toLocaleString()} <span className="text-[10px] uppercase font-bold text-emerald-500/70 ml-1">Closed Pipeline</span></div>
               </div>
             </div>
           </CardContent>
         </Card>
 
-        {/* Linked Projects */}
         <Card className="md:col-span-2 shadow-sm border-border/50">
-          <CardHeader className="flex flex-row items-center justify-between">
+          <CardHeader className="flex flex-row items-baseline justify-between bg-muted/5 border-b border-border/50 pb-4">
             <div>
-              <CardTitle>Linked Projects</CardTitle>
-              <CardDescription>All projects associated with this client</CardDescription>
+              <CardTitle className="flex items-center gap-2">Linked Routing Nodes</CardTitle>
+              <CardDescription className="font-medium mt-1">Physical project entities mapping to this Client ID.</CardDescription>
             </div>
-            <Button size="sm" asChild>
-              <Link href={`/projects/new?client=${client.id}`}>
-                New Project
+            <Button size="sm" asChild className="shadow-sm font-bold">
+              <Link href={`/projects/new?client=${clientProfile.id}`}>
+                Attach Pipeline
               </Link>
             </Button>
           </CardHeader>
-          <CardContent>
+          <CardContent className="pt-4">
             {clientProjects.length > 0 ? (
               <Table>
                 <TableHeader>
-                  <TableRow className="border-border/50">
-                    <TableHead>Project Title</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Deadline</TableHead>
-                    <TableHead className="text-right">Action</TableHead>
+                  <TableRow className="border-border/50 hover:bg-transparent">
+                    <TableHead className="font-bold text-xs uppercase tracking-wider text-muted-foreground py-3">Vector String</TableHead>
+                    <TableHead className="font-bold text-xs uppercase tracking-wider text-muted-foreground py-3">Pipeline Match</TableHead>
+                    <TableHead className="font-bold text-xs uppercase tracking-wider text-muted-foreground py-3">Block Timeline</TableHead>
+                    <TableHead className="font-bold text-xs uppercase tracking-wider text-muted-foreground py-3 text-right">Physical Link</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {clientProjects.map(project => (
-                    <TableRow key={project.id} className="border-border/50 group">
-                      <TableCell className="font-medium flex items-center gap-2">
-                        <FolderKanban className="h-4 w-4 text-muted-foreground" />
-                        {project.title}
+                  {clientProjects.map((project: any) => (
+                    <TableRow key={project.id} className="border-border/50 group hover:bg-muted/20">
+                      <TableCell className="font-bold flex items-center gap-2 py-4">
+                        <FolderKanban className="h-4 w-4 text-primary shrink-0" />
+                        <span className="truncate max-w-[200px]">{project.title}</span>
                       </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
+                      <TableCell className="py-4">
+                        <div className="flex items-center gap-2 font-semibold">
                           {getStatusIcon(project.status)}
                           <span className="capitalize text-sm">{project.status}</span>
                         </div>
                       </TableCell>
-                      <TableCell className="text-muted-foreground text-sm">
-                        {new Date(project.deadline).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                      <TableCell className="text-muted-foreground text-sm font-medium py-4">
+                        {project.deadline ? project.deadline.split('T')[0] : "None"}
                       </TableCell>
-                      <TableCell className="text-right">
-                        <Button variant="ghost" size="sm" asChild className="opacity-0 group-hover:opacity-100 transition-opacity">
-                          <Link href={`/projects/${project.id}`}>View Details</Link>
+                      <TableCell className="text-right py-4">
+                        <Button variant="outline" size="sm" asChild className="opacity-0 group-hover:opacity-100 transition-opacity font-semibold">
+                          <Link href={`/projects/${project.id}`}>Inspect Document</Link>
                         </Button>
                       </TableCell>
                     </TableRow>
@@ -136,12 +177,12 @@ export default function ClientProfilePage() {
                 </TableBody>
               </Table>
             ) : (
-              <div className="text-center py-12 border border-dashed rounded-lg border-border/50 mt-2">
-                <FolderKanban className="mx-auto h-8 w-8 text-muted-foreground opacity-50 mb-3" />
-                <h3 className="text-lg font-medium">No projects found</h3>
-                <p className="text-sm text-muted-foreground mt-1 mb-4">This client doesn&apos;t have any projects yet.</p>
-                <Button asChild>
-                  <Link href={`/projects/new?client=${client.id}`}>Create their first project</Link>
+              <div className="text-center py-12 border border-dashed rounded-lg border-border/50 mt-2 bg-muted/5">
+                <FolderKanban className="mx-auto h-8 w-8 text-muted-foreground opacity-30 mb-3" />
+                <h3 className="text-lg font-bold">Null Entity Output</h3>
+                <p className="text-sm font-medium text-muted-foreground mt-1 mb-4">No mapped references detected inside DB queries globally.</p>
+                <Button asChild className="shadow-sm font-semibold">
+                  <Link href={`/projects/new?client=${clientProfile.id}`}>Bind Initial Project Object</Link>
                 </Button>
               </div>
             )}

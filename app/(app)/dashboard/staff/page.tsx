@@ -1,8 +1,8 @@
+/* eslint-disable react-hooks/set-state-in-effect */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client"
 
 import { useAuth } from "@/lib/auth-context"
-import { mockProjects, Project } from "@/lib/mock/projects"
-import { mockClients } from "@/lib/mock/clients"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -11,14 +11,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/u
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { FolderKanban, Upload, FileText, Download, Calendar, Trash2 } from "lucide-react"
-import { useState } from "react"
+import { FolderKanban, Upload, FileText, Download, Calendar, Trash2, Loader2, Link as LinkIcon } from "lucide-react"
+import { useState, useEffect } from "react"
+import { createClient } from "@/lib/supabase/client"
+import { toast } from "sonner"
 
 export default function StaffDashboard() {
   const { user } = useAuth()
+  const supabase = createClient()
   
-  // Filter projects assigned to this staff member
-  const [assignedProjects, setAssignedProjects] = useState(mockProjects.filter(p => p.assignedStaffIds.includes(user?.id || "")))
+  const [loading, setLoading] = useState(true)
+  const [assignedProjects, setAssignedProjects] = useState<any[]>([])
 
   // Dialog State Tracker
   const [completeModalOpen, setCompleteModalOpen] = useState(false)
@@ -26,17 +29,39 @@ export default function StaffDashboard() {
   const [completionNotes, setCompletionNotes] = useState("")
   const [completionLinks, setCompletionLinks] = useState("")
   const [completionFiles, setCompletionFiles] = useState<File[]>([])
+  const [submitting, setSubmitting] = useState(false)
   
-  // Get upcoming deadlines for assigned projects
+  const fetchProjects = async () => {
+    if (!user) return
+    const { data } = await supabase
+      .from('project_assignments')
+      .select(`
+        project_id,
+        projects (*, client:profiles!projects_client_id_fkey(name))
+      `)
+      .eq('user_id', user.id)
+
+    if (data) {
+      setAssignedProjects(data.map((d: any) => d.projects).filter(Boolean))
+    }
+    setLoading(false)
+  }
+
+  useEffect(() => {
+    let mounted = true
+    if (user?.id) fetchProjects()
+    return () => { mounted = false }
+  }, [user, supabase])
+
   const upcomingDeadlines = [...assignedProjects]
     .filter(p => p.status !== "completed")
     .sort((a, b) => new Date(a.deadline).getTime() - new Date(b.deadline).getTime())
     .slice(0, 5)
 
-  // Get all files from assigned projects
-  const allFiles = assignedProjects.flatMap(p => 
-    p.files.map(f => ({ ...f, projectTitle: p.title }))
-  ).sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime())
+  const allFiles = assignedProjects.flatMap(p => {
+    const files = Array.isArray(p.deliverables_files) ? p.deliverables_files : [];
+    return files.map((f: any) => ({ ...f, projectTitle: p.title }));
+  }).sort((a: any, b: any) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime())
   .slice(0, 5)
 
   const getStatusBadge = (status: string) => {
@@ -48,30 +73,65 @@ export default function StaffDashboard() {
     }
   }
 
-  const handleStatusChange = (projectId: string, newStatus: string) => {
+  const handleStatusChange = async (projectId: string, newStatus: string) => {
     if (newStatus === "completed") {
       setProjectToComplete(projectId)
       setCompleteModalOpen(true)
       return
     }
-    setAssignedProjects(prev => prev.map(p => p.id === projectId ? { ...p, status: newStatus as Project['status'] } : p))
+    
+    // Update local immediately
+    setAssignedProjects(prev => prev.map(p => p.id === projectId ? { ...p, status: newStatus } : p))
+    
+    // Natively hit Supabase
+    const { error } = await supabase.from('projects').update({ status: newStatus }).eq('id', projectId)
+    if (error) {
+      toast.error("Failed to update status")
+      fetchProjects() // Revert
+    } else {
+      toast.success("Project status updated")
+    }
   }
 
-  const submitCompletion = () => {
-    if (projectToComplete) {
-      const details = {
-        notes: completionNotes,
-        links: completionLinks.split('\n').map(l => l.trim()).filter(Boolean),
-        files: completionFiles.map((f, i) => ({
-          id: `newf-${i}`,
-          name: f.name,
-          type: f.type,
-          url: URL.createObjectURL(f),
+  const submitCompletion = async () => {
+    if (!projectToComplete) return
+    setSubmitting(true)
+
+    // Parallel File Upload to Secure Storage
+    const uploadedFilesData = []
+    for (const file of completionFiles) {
+      const fileName = `${Date.now()}_${file.name.replace(/\s+/g, '_')}`
+      const { data, error } = await supabase.storage.from('deliverables_vault').upload(`projects/${projectToComplete}/${fileName}`, file)
+      if (!error && data) {
+        const { data: { publicUrl } } = supabase.storage.from('deliverables_vault').getPublicUrl(data.path)
+        uploadedFilesData.push({
+          name: file.name,
+          url: publicUrl,
+          type: file.type,
           uploadedAt: new Date().toISOString()
-        }))
+        })
       }
-      setAssignedProjects(prev => prev.map(p => p.id === projectToComplete ? { ...p, status: "completed", completionDetails: details } : p))
     }
+
+    const compiledLinks = completionLinks.split('\n').map(l => l.trim()).filter(Boolean)
+
+    const completionPayload = {
+      status: 'completed',
+      deliverables_summary: completionNotes,
+      deliverables_links: compiledLinks,
+      deliverables_files: uploadedFilesData
+    }
+
+    const { error } = await supabase.from('projects').update(completionPayload).eq('id', projectToComplete)
+
+    if (error) {
+      toast.error("Failed to complete project")
+    } else {
+      toast.success("Project completed successfully!")
+      setAssignedProjects(prev => prev.map(p => p.id === projectToComplete ? { ...p, ...completionPayload } : p))
+    }
+
+    setSubmitting(false)
     setCompleteModalOpen(false)
     setProjectToComplete(null)
     setCompletionNotes("")
@@ -79,20 +139,28 @@ export default function StaffDashboard() {
     setCompletionFiles([])
   }
 
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-screen border rounded-xl bg-background/50">
+        <Loader2 className="h-10 w-10 text-primary animate-spin" />
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Staff Workspace</h1>
-        <p className="text-muted-foreground mt-1">Manage your assigned projects and deadlines.</p>
+        <p className="text-muted-foreground mt-1">Manage your native Supabase project assignments.</p>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
-        {/* Module 1 & 3: Assigned Projects & Update Project Status */}
+        {/* Module 1/3: Assigned Projects */}
         <Card className="md:col-span-2 shadow-sm border-border/50">
           <CardHeader className="flex flex-row items-center justify-between">
             <div>
               <CardTitle>My Projects</CardTitle>
-              <CardDescription>Projects currently assigned to you</CardDescription>
+              <CardDescription>Projects natively tracking against your Profile ID</CardDescription>
             </div>
           </CardHeader>
           <CardContent>
@@ -107,59 +175,58 @@ export default function StaffDashboard() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {assignedProjects.map(project => {
-                    const client = mockClients.find(c => c.id === project.clientId)
-                    return (
-                      <TableRow key={project.id} className="border-border/50">
-                        <TableCell className="font-medium">{project.title}</TableCell>
-                        <TableCell className="text-muted-foreground">{client?.name}</TableCell>
-                        <TableCell>
-                          <span className="flex items-center whitespace-nowrap text-xs">
-                            <Calendar className="mr-1 h-3 w-3" />
-                            {new Date(project.deadline).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                  {assignedProjects.map(project => (
+                    <TableRow key={project.id} className="border-border/50">
+                      <TableCell className="font-medium">{project.title}</TableCell>
+                      <TableCell className="text-muted-foreground">{project.client?.name || 'Unknown'}</TableCell>
+                      <TableCell>
+                        {project.deadline ? (
+                          <span className="flex items-center whitespace-nowrap text-xs font-medium">
+                            <Calendar className="mr-1.5 h-3.5 w-3.5 text-muted-foreground" />
+                            {new Date(project.deadline).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
                           </span>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <Select value={project.status} onValueChange={(val) => handleStatusChange(project.id, val as Project['status'])}>
-                              <SelectTrigger className="w-[120px] h-8 text-xs">
-                                <span className="capitalize">{project.status}</span>
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="pending">Pending</SelectItem>
-                                <SelectItem value="active">Active</SelectItem>
-                                <SelectItem value="completed">Completed</SelectItem>
-                                <SelectItem value="approved">Approved</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
+                        ) : (
+                          <span className="text-xs text-muted-foreground">None</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Select value={project.status} onValueChange={(val) => handleStatusChange(project.id, val)}>
+                          <SelectTrigger className="w-[125px] h-8 text-xs font-medium capitalize">
+                            {project.status}
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="pending">Pending</SelectItem>
+                            <SelectItem value="active">Active</SelectItem>
+                            <SelectItem value="completed">Completed</SelectItem>
+                            {project.status === "approved" && (
+                              <SelectItem value="approved">Approved</SelectItem>
+                            )}
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
+                    </TableRow>
+                  ))}
                 </TableBody>
               </Table>
             ) : (
               <div className="text-center py-10 text-muted-foreground">
                 <FolderKanban className="mx-auto h-8 w-8 opacity-50 mb-2" />
-                <p>No projects assigned yet</p>
+                <p>No relational projects assigned yet</p>
               </div>
             )}
           </CardContent>
         </Card>
 
-        {/* Right Column: Deadlines & Files */}
+        {/* Right Column: Deadlines & Live Shared Files */}
         <div className="space-y-4 md:col-span-1">
-          {/* Module 2: Deadlines */}
           <Card className="shadow-sm border-border/50">
             <CardHeader>
               <CardTitle>Upcoming Deadlines</CardTitle>
-              <CardDescription>Tasks requiring immediate attention</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
                 {upcomingDeadlines.length > 0 ? upcomingDeadlines.map(project => {
-                  const daysLeft = Math.ceil((new Date(project.deadline).getTime() - new Date().getTime()) / (1000 * 3600 * 24))
+                  const daysLeft = project.deadline ? Math.ceil((new Date(project.deadline).getTime() - new Date().getTime()) / (1000 * 3600 * 24)) : 0
                   return (
                     <div key={project.id} className="flex items-center justify-between border-b border-border/50 pb-3 last:border-0 last:pb-0">
                       <div className="space-y-1">
@@ -168,47 +235,48 @@ export default function StaffDashboard() {
                           {getStatusBadge(project.status)}
                         </div>
                       </div>
-                      <Badge variant={daysLeft < 3 ? "destructive" : "secondary"} className="whitespace-nowrap ml-2">
-                        {daysLeft < 0 ? "Overdue" : `${daysLeft} days`}
-                      </Badge>
+                      {project.deadline && (
+                        <Badge variant={daysLeft < 3 ? "destructive" : "secondary"} className="whitespace-nowrap ml-2">
+                          {daysLeft < 0 ? "Overdue" : `${daysLeft} days`}
+                        </Badge>
+                      )}
                     </div>
                   )
                 }) : (
-                  <p className="text-muted-foreground text-sm text-center py-4">No upcoming deadlines</p>
+                  <p className="text-muted-foreground text-sm text-center py-4">No tight deadlines parsed</p>
                 )}
               </div>
             </CardContent>
           </Card>
 
-          {/* Module 4: Upload / View Files */}
           <Card className="shadow-sm border-border/50">
             <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
               <div className="space-y-1">
-                <CardTitle>Recent Files</CardTitle>
-                <CardDescription>From your projects</CardDescription>
+                <CardTitle>Recent Vault Drops</CardTitle>
               </div>
-              <Button size="icon" variant="outline" className="h-8 w-8">
-                <Upload className="h-4 w-4" />
-                <span className="sr-only">Upload File</span>
+              <Button size="icon" variant="outline" className="h-8 w-8" disabled>
+                <FileText className="h-4 w-4" />
               </Button>
             </CardHeader>
             <CardContent>
               <div className="space-y-3 mt-4">
-                {allFiles.length > 0 ? allFiles.map(file => (
-                  <div key={file.id} className="flex items-center gap-3 border bg-muted/30 p-2 rounded-md">
+                {allFiles.length > 0 ? allFiles.map((file, idx) => (
+                  <div key={idx} className="flex items-center gap-3 border bg-muted/30 p-2 rounded-md">
                     <div className="p-2 bg-primary/10 rounded">
-                      <FileText className="h-4 w-4 text-primary" />
+                      {file.type?.includes('image') ? <FileText className="h-4 w-4 text-primary" /> : <LinkIcon className="h-4 w-4 text-primary" />}
                     </div>
                     <div className="flex-1 space-y-1 overflow-hidden">
                       <p className="text-sm font-medium leading-none truncate">{file.name}</p>
                       <p className="text-xs text-muted-foreground truncate">{file.projectTitle}</p>
                     </div>
-                    <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0">
-                      <Download className="h-3 w-3" />
+                    <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" asChild>
+                      <a href={file.url} target="_blank" rel="noopener noreferrer">
+                        <Download className="h-3 w-3" />
+                      </a>
                     </Button>
                   </div>
                 )) : (
-                  <p className="text-muted-foreground text-sm text-center py-4">No files available</p>
+                  <p className="text-muted-foreground text-sm text-center py-4">Vault empty</p>
                 )}
               </div>
             </CardContent>
@@ -216,65 +284,64 @@ export default function StaffDashboard() {
         </div>
       </div>
 
+      {/* Reused Exact Structural Delivery Form */}
       <Dialog open={completeModalOpen} onOpenChange={setCompleteModalOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Complete Project</DialogTitle>
             <DialogDescription>
-              Please provide a summary of the work completed and upload final deliverables before closing this project.
+              Commit the database tracking array natively storing explicit physical URL downloads tracking Vault drops cleanly.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
               <Label>Work Summary <span className="text-destructive">*</span></Label>
               <textarea 
-                className="flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                placeholder="Briefly describe the outcome..."
+                className="flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                placeholder="Database summary entry..."
                 value={completionNotes}
                 onChange={(e) => setCompletionNotes(e.target.value)}
               />
             </div>
             <div className="space-y-2">
-              <Label>Important Links (Optional)</Label>
+              <Label>Important URLs (Optional)</Label>
               <textarea 
-                className="flex min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                placeholder="https://example.com/live-site (one per line)"
+                className="flex min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                placeholder="https://... (one per line)"
                 value={completionLinks}
                 onChange={(e) => setCompletionLinks(e.target.value)}
               />
             </div>
             <div className="space-y-2">
-              <Label>Final Deliverables (Optional)</Label>
+              <Label>Final Deliverables (Auto Secure Vault Drop)</Label>
               <div className="border-2 border-dashed rounded-lg p-6 flex flex-col items-center justify-center text-muted-foreground bg-muted/10 relative">
                 <Input type="file" multiple className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" onChange={(e) => {
                   if (e.target.files) setCompletionFiles([...completionFiles, ...Array.from(e.target.files)])
                 }} />
-                <FolderKanban className="h-8 w-8 mb-2 opacity-70" />
-                <p className="text-sm font-medium">Click or drag files to upload</p>
+                <Upload className="h-8 w-8 mb-2 opacity-70" />
+                <p className="text-sm font-medium">Click or drag files to trigger Storage array</p>
                 {completionFiles.length > 0 && (
                   <div className="mt-4 w-full space-y-2 text-left z-20 relative">
-                    <p className="text-xs text-primary font-semibold border-b pb-1">{completionFiles.length} file(s) pending upload:</p>
-                    <div className="max-h-[120px] overflow-y-auto space-y-1.5 pr-2">
+                     <div className="max-h-[120px] overflow-y-auto space-y-1.5 pr-2">
                       {completionFiles.map((f, i) => (
                         <div key={i} className="flex items-center justify-between bg-background p-1.5 rounded-md border text-xs shadow-sm">
                           <span className="truncate pr-2 font-medium">{f.name}</span>
-                          <Button size="icon" variant="ghost" className="h-6 w-6 shrink-0 text-destructive hover:bg-destructive/10" onClick={(e) => {
-                            e.preventDefault();
-                            setCompletionFiles(prev => prev.filter((_, idx) => idx !== i));
-                          }}>
-                            <Trash2 className="h-3 w-3" />
+                          <Button size="icon" variant="ghost" onClick={(e) => { e.preventDefault(); setCompletionFiles(prev => prev.filter((_, idx) => idx !== i)); }}>
+                            <Trash2 className="h-3 w-3 text-destructive" />
                           </Button>
                         </div>
                       ))}
-                    </div>
+                     </div>
                   </div>
                 )}
               </div>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCompleteModalOpen(false)}>Cancel</Button>
-            <Button disabled={!completionNotes.trim()} onClick={submitCompletion}>Submit & Complete</Button>
+            <Button variant="outline" onClick={() => setCompleteModalOpen(false)} disabled={submitting}>Cancel</Button>
+            <Button disabled={!completionNotes.trim() || submitting} onClick={submitCompletion}>
+              {submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : "Commit Array"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

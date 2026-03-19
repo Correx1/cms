@@ -1,63 +1,138 @@
 "use client"
 
 import { useAuth } from "@/lib/auth-context"
-import { mockProjects, Project } from "@/lib/mock/projects"
-import { mockClients } from "@/lib/mock/clients"
-import { mockStaff } from "@/lib/mock/staff"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Plus, FolderKanban, Clock, CheckCircle2, Search, Filter, Activity, Calendar, ChevronDown, ListChecks, ShieldCheck } from "lucide-react"
+import { Plus, FolderKanban, Clock, CheckCircle2, Search, Filter, Activity, Calendar, ChevronDown, ListChecks, ShieldCheck, Loader2, Upload, Trash2 } from "lucide-react"
 import Link from "next/link"
 import { Input } from "@/components/ui/input"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
-import { useState } from "react"
+import { useState, useEffect } from "react"
+import { createClient } from "@/lib/supabase/client"
+import { toast } from "sonner"
+import { Badge } from "@/components/ui/badge"
 
 export default function ProjectsPage() {
   const { user } = useAuth()
-  const [projectsState, setProjectsState] = useState<Project[]>(mockProjects)
+  const supabase = createClient()
+
+  const [loading, setLoading] = useState(true)
+  const [projectsState, setProjectsState] = useState<any[]>([])
+  const [searchQuery, setSearchQuery] = useState("")
+
   const [completeModalOpen, setCompleteModalOpen] = useState(false)
   const [projectToComplete, setProjectToComplete] = useState<string | null>(null)
   const [completionNotes, setCompletionNotes] = useState("")
   const [completionLinks, setCompletionLinks] = useState("")
   const [completionFiles, setCompletionFiles] = useState<File[]>([])
+  const [submitting, setSubmitting] = useState(false)
 
-  // Phase 1 local state filter
-  let visibleProjects = projectsState
-  if (user?.role === "staff") {
-    visibleProjects = projectsState.filter(p => p.assignedStaffIds.includes(user.id))
-  } else if (user?.role === "client") {
-    visibleProjects = projectsState.filter(p => p.clientId === user.id)
+  const fetchProjects = async () => {
+    if (!user) return
+    let query = supabase.from('projects').select(`
+      *,
+      client:profiles!projects_client_id_fkey(name),
+      assignments:project_assignments(profiles(name))
+    `).order('created_at', { ascending: false })
+
+    if (user.role === 'client') {
+      query = query.eq('client_id', user.id)
+    }
+
+    const { data } = await query
+
+    if (data) {
+      if (user.role === 'staff') {
+        const { data: assignments } = await supabase.from('project_assignments').select('project_id').eq('user_id', user.id)
+        const projectIds = assignments?.map(a => a.project_id) || []
+        setProjectsState(data.filter(p => projectIds.includes(p.id)))
+      } else {
+        setProjectsState(data)
+      }
+    }
+    setLoading(false)
   }
 
-  const handleStatusChange = (projectId: string, newStatus: Project['status']) => {
+  useEffect(() => {
+    let mounted = true
+    if (user?.id) fetchProjects()
+    return () => { mounted = false }
+  }, [user, supabase])
+
+  const visibleProjects = projectsState.filter(p => p.title.toLowerCase().includes(searchQuery.toLowerCase()))
+
+  const handleStatusChange = async (projectId: string, newStatus: string) => {
     if (newStatus === "completed") {
       setProjectToComplete(projectId)
       setCompleteModalOpen(true)
       return
     }
-    // Optimistic UI update wrapper
+    
     setProjectsState(prev => prev.map(p => p.id === projectId ? { ...p, status: newStatus } : p))
+    
+    const { error } = await supabase.from('projects').update({ status: newStatus }).eq('id', projectId)
+    if (error) {
+      toast.error("Failed to sync status")
+      fetchProjects()
+    } else {
+      toast.success("Project status updated")
+    }
   }
 
-  const submitCompletion = () => {
-    if (projectToComplete) {
-      // Form structural completion payload map
-      const details = {
-        notes: completionNotes,
-        links: completionLinks.split('\n').map(l => l.trim()).filter(Boolean),
-        files: completionFiles.map((f, i) => ({
-          id: `newf-${i}`,
-          name: f.name,
-          type: f.type,
-          url: URL.createObjectURL(f),
-          uploadedAt: new Date().toISOString()
-        }))
-      }
-      setProjectsState(prev => prev.map(p => p.id === projectToComplete ? { ...p, status: "completed", completionDetails: details } : p))
+  const handleDelete = async (projectId: string) => {
+    if (!window.confirm("Are you sure you want to permanently delete this project?")) return
+    
+    setProjectsState(prev => prev.filter(p => p.id !== projectId))
+    const { error } = await supabase.from('projects').delete().eq('id', projectId)
+    if (error) {
+      toast.error("Failed to delete project")
+      fetchProjects()
+    } else {
+      toast.success("Project tracking removed")
     }
+  }
+
+  const submitCompletion = async () => {
+    if (!projectToComplete) return
+    setSubmitting(true)
+
+    const uploadedFilesData = []
+    for (const file of completionFiles) {
+      const fileName = `${Date.now()}_${file.name.replace(/\s+/g, '_')}`
+      const { data, error } = await supabase.storage.from('deliverables_vault').upload(`projects/${projectToComplete}/${fileName}`, file)
+      if (!error && data) {
+        const { data: { publicUrl } } = supabase.storage.from('deliverables_vault').getPublicUrl(data.path)
+        uploadedFilesData.push({
+          name: file.name,
+          url: publicUrl,
+          type: file.type,
+          uploadedAt: new Date().toISOString()
+        })
+      }
+    }
+
+    const compiledLinks = completionLinks.split('\n').map(l => l.trim()).filter(Boolean)
+
+    const completionPayload = {
+      status: 'completed',
+      deliverables_summary: completionNotes,
+      deliverables_links: compiledLinks,
+      deliverables_files: uploadedFilesData
+    }
+
+    const { error } = await supabase.from('projects').update(completionPayload).eq('id', projectToComplete)
+
+    if (error) {
+      toast.error("Failed to complete project")
+    } else {
+      toast.success("Project safely validated!")
+      setProjectsState(prev => prev.map(p => p.id === projectToComplete ? { ...p, ...completionPayload } : p))
+    }
+
+    setSubmitting(false)
     setCompleteModalOpen(false)
     setProjectToComplete(null)
     setCompletionNotes("")
@@ -83,12 +158,17 @@ export default function ProjectsPage() {
     }
   }
 
-  const getAssignedStaffNames = (staffIds: string[]) => {
-    if (!staffIds || staffIds.length === 0) return "None"
-    return staffIds
-      .map(id => mockStaff.find(s => s.id === id)?.name)
-      .filter(Boolean)
-      .join(", ")
+  const getAssignedStaffNames = (assignments: any[]) => {
+    if (!assignments || assignments.length === 0) return "None"
+    return assignments.map((a: any) => a.profiles?.name).filter(Boolean).join(", ")
+  }
+
+  if (loading) {
+     return (
+        <div className="flex items-center justify-center h-[70vh]">
+          <Loader2 className="h-10 w-10 text-primary animate-spin" />
+        </div>
+     )
   }
 
   return (
@@ -96,7 +176,7 @@ export default function ProjectsPage() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Projects Directory</h1>
-          <p className="text-sm md:text-base text-muted-foreground mt-1">Track and manage all agency projects.</p>
+          <p className="text-sm md:text-base text-muted-foreground mt-1">Track and manage securely encrypted agency documents natively.</p>
         </div>
         {(user?.role === "admin") && (
           <Button className="shadow-sm shadow-primary/20 w-full sm:w-auto" asChild>
@@ -119,13 +199,14 @@ export default function ProjectsPage() {
                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
                   type="search"
-                  placeholder="Search projects by name..."
+                  placeholder="Search live trackers..."
                   className="w-full pl-9 bg-background/50 h-9"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
                 />
               </div>
               <Button variant="outline" size="icon" className="h-9 w-9 shrink-0">
                 <Filter className="h-4 w-4" />
-                <span className="sr-only">Filter</span>
               </Button>
             </div>
           </div>
@@ -139,13 +220,13 @@ export default function ProjectsPage() {
                   <TableHead className="py-4 text-sm">Client</TableHead>
                   <TableHead className="py-4 text-sm">Status</TableHead>
                   <TableHead className="py-4 text-sm hidden md:table-cell">Assigned Staff</TableHead>
-                  <TableHead className="py-4 text-sm hidden lg:table-cell">Deadline</TableHead>
+                  <TableHead className="py-4 text-sm hidden lg:table-cell">Deadline Tracker</TableHead>
                   <TableHead className="py-4 pr-6 text-right text-sm">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {visibleProjects.length > 0 ? visibleProjects.map(project => {
-                  const client = mockClients.find(c => c.id === project.clientId)
+                  const daysLeft = project.deadline ? Math.ceil((new Date(project.deadline).getTime() - new Date().getTime()) / (1000 * 3600 * 24)) : 0
                   return (
                     <TableRow key={project.id} className="border-border/50 group hover:bg-muted/30 transition-colors">
                       <TableCell className="font-medium pl-6 py-4">
@@ -157,7 +238,7 @@ export default function ProjectsPage() {
                       </TableCell>
                       <TableCell className="py-4">
                         <span className="text-sm font-medium text-foreground">
-                          {client?.name || "Unknown"}
+                          {project.client?.name || "Unknown"}
                         </span>
                       </TableCell>
                       <TableCell className="py-4">
@@ -173,14 +254,17 @@ export default function ProjectsPage() {
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="start">
-                              <DropdownMenuItem onClick={() => handleStatusChange(project.id, "pending")} className="cursor-pointer">
+                              <DropdownMenuItem onClick={() => handleStatusChange(project.id, "pending")} className="cursor-pointer font-medium">
                                 <Clock className="mr-2 h-4 w-4 text-yellow-500" /> Pending
                               </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => handleStatusChange(project.id, "active")} className="cursor-pointer">
+                              <DropdownMenuItem onClick={() => handleStatusChange(project.id, "active")} className="cursor-pointer font-medium">
                                 <Activity className="mr-2 h-4 w-4 text-blue-500" /> Active
                               </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => handleStatusChange(project.id, "completed")} className="cursor-pointer">
+                              <DropdownMenuItem onClick={() => handleStatusChange(project.id, "completed")} className="cursor-pointer font-medium">
                                 <CheckCircle2 className="mr-2 h-4 w-4 text-emerald-500" /> Completed
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => handleStatusChange(project.id, "approved")} className="cursor-pointer font-medium border-t">
+                                <ShieldCheck className="mr-2 h-4 w-4 text-indigo-500" /> Approved
                               </DropdownMenuItem>
                             </DropdownMenuContent>
                           </DropdownMenu>
@@ -193,14 +277,19 @@ export default function ProjectsPage() {
                       </TableCell>
                       <TableCell className="py-4 hidden md:table-cell">
                         <div className="text-sm text-muted-foreground whitespace-nowrap truncate max-w-[150px]">
-                          {getAssignedStaffNames(project.assignedStaffIds)}
+                          {getAssignedStaffNames(project.assignments || [])}
                         </div>
                       </TableCell>
-                      <TableCell className="py-4 hidden lg:table-cell text-sm font-medium text-muted-foreground">
-                        <span className="flex items-center gap-1.5 whitespace-nowrap">
-                          <Calendar className="h-4 w-4" />
-                          {new Date(project.deadline).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
-                        </span>
+                      <TableCell className="py-4 hidden lg:table-cell">
+                        {project.deadline ? (
+                          <div className="flex items-center gap-2">
+                            <Badge variant={daysLeft < 3 ? "destructive" : "secondary"} className="w-fit text-xs px-2 py-0.5 whitespace-nowrap">
+                              {daysLeft < 0 ? "Overdue" : `${daysLeft} Days Left`}
+                            </Badge>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">None</span>
+                        )}
                       </TableCell>
                       <TableCell className="text-right pr-6 py-4">
                         <DropdownMenu>
@@ -221,7 +310,12 @@ export default function ProjectsPage() {
                               </DropdownMenuItem>
                             )}
                             {user?.role === "admin" && (
-                              <DropdownMenuItem className="text-destructive font-semibold">Delete Project</DropdownMenuItem>
+                              <>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem onClick={() => handleDelete(project.id)} className="text-destructive font-semibold cursor-pointer">
+                                  Delete Target
+                                </DropdownMenuItem>
+                              </>
                             )}
                           </DropdownMenuContent>
                         </DropdownMenu>
@@ -231,7 +325,7 @@ export default function ProjectsPage() {
                 }) : (
                   <TableRow>
                     <TableCell colSpan={6} className="h-32 text-center text-muted-foreground text-base">
-                      No matching projects found.
+                      No matching projects tracked on Cloud.
                     </TableCell>
                   </TableRow>
                 )}
@@ -244,47 +338,60 @@ export default function ProjectsPage() {
       <Dialog open={completeModalOpen} onOpenChange={setCompleteModalOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Complete Project</DialogTitle>
+            <DialogTitle>Complete Live Project</DialogTitle>
             <DialogDescription>
-              Please provide a summary of the work completed and upload final deliverables before closing this project.
+              Commit the database tracking array securely storing Deliverables physically upon completion boundaries safely.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
               <Label>Work Summary <span className="text-destructive">*</span></Label>
               <textarea 
-                className="flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                placeholder="Briefly describe the outcome..."
+                className="flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                placeholder="Database summary chunk..."
                 value={completionNotes}
                 onChange={(e) => setCompletionNotes(e.target.value)}
               />
             </div>
             <div className="space-y-2">
-              <Label>Important Links (Optional)</Label>
+              <Label>Live URLs (Optional)</Label>
               <textarea 
-                className="flex min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                placeholder="https://example.com/live-site (one per line)"
+                className="flex min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2"
+                placeholder="https://..."
                 value={completionLinks}
                 onChange={(e) => setCompletionLinks(e.target.value)}
               />
             </div>
             <div className="space-y-2">
-              <Label>Final Deliverables (Optional)</Label>
+              <Label>Final Drop Vault</Label>
               <div className="border-2 border-dashed rounded-lg p-6 flex flex-col items-center justify-center text-muted-foreground bg-muted/10 relative">
-                <Input type="file" multiple className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onChange={(e) => {
-                  if (e.target.files) setCompletionFiles(Array.from(e.target.files))
+                <Input type="file" multiple className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" onChange={(e) => {
+                  if (e.target.files) setCompletionFiles([...completionFiles, ...Array.from(e.target.files)])
                 }} />
-                <FolderKanban className="h-8 w-8 mb-2 opacity-70" />
-                <p className="text-sm font-medium">Click or drag files to upload</p>
+                <Upload className="h-8 w-8 mb-2 opacity-70" />
+                <p className="text-sm font-medium">Drag live deliverables mapping strictly safely</p>
                 {completionFiles.length > 0 && (
-                  <p className="text-xs text-primary mt-2 font-semibold">{completionFiles.length} file(s) selected</p>
+                  <div className="mt-4 w-full space-y-2 text-left z-20 relative">
+                     <div className="max-h-[120px] overflow-y-auto space-y-1.5 pr-2">
+                      {completionFiles.map((f, i) => (
+                        <div key={i} className="flex items-center justify-between bg-background p-1.5 rounded-md border text-xs shadow-sm">
+                          <span className="truncate pr-2 font-medium">{f.name}</span>
+                          <Button size="icon" variant="ghost" onClick={(e) => { e.preventDefault(); setCompletionFiles(prev => prev.filter((_, idx) => idx !== i)); }}>
+                            <Trash2 className="h-3 w-3 text-destructive" />
+                          </Button>
+                        </div>
+                      ))}
+                     </div>
+                  </div>
                 )}
               </div>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCompleteModalOpen(false)}>Cancel</Button>
-            <Button disabled={!completionNotes.trim()} onClick={submitCompletion}>Submit & Complete</Button>
+            <Button variant="outline" onClick={() => setCompleteModalOpen(false)} disabled={submitting}>Cancel</Button>
+            <Button disabled={!completionNotes.trim() || submitting} onClick={submitCompletion}>
+              {submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : "Verify & Commit"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
