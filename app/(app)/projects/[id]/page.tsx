@@ -30,6 +30,8 @@ export default function ProjectDetailsPage() {
   const [completionNotes, setCompletionNotes] = useState("")
   const [completionLinks, setCompletionLinks] = useState("")
   const [completionFiles, setCompletionFiles] = useState<File[]>([])
+  const [rejectModalOpen, setRejectModalOpen] = useState(false)
+  const [feedbackNotes, setFeedbackNotes] = useState("")
 
   const getStatusIcon = (status: string) => {
     switch(status) {
@@ -77,8 +79,13 @@ export default function ProjectDetailsPage() {
         }))
       ]
     }
-    setProject({ ...project, status: "completed", completionDetails: details })
+    setProject({ ...project, status: "completed", completionDetails: details, clientFeedback: undefined })
     setCompleteModalOpen(false)
+  }
+
+  const submitRejection = () => {
+    setProject({ ...project, status: "active", clientFeedback: feedbackNotes })
+    setRejectModalOpen(false)
   }
 
   const deleteCompletionFile = (fileId: string) => {
@@ -293,7 +300,7 @@ export default function ProjectDetailsPage() {
             
             {project.status === "completed" && user?.role === "client" && (
               <div className="flex gap-2 shrink-0">
-                <Button variant="outline" size="sm" onClick={() => handleStatusChange("active")} className="border-destructive/20 text-destructive hover:bg-destructive/10">
+                <Button variant="outline" size="sm" onClick={() => setRejectModalOpen(true)} className="border-destructive/20 text-destructive hover:bg-destructive/10">
                   <AlertCircle className="h-4 w-4 mr-2" /> Request Revision
                 </Button>
                 <Button size="sm" onClick={() => handleStatusChange("approved")} className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm">
@@ -373,6 +380,19 @@ export default function ProjectDetailsPage() {
         </Card>
       )}
 
+      {project.clientFeedback && project.status === "active" && (
+        <Card className="shadow-sm mt-6 mb-8 border-destructive/30 bg-destructive/5">
+          <CardHeader className="pb-3 border-b border-destructive/20">
+            <CardTitle className="text-destructive flex items-center gap-2 text-base">
+              <AlertCircle className="h-5 w-5" /> Revision Required (Client Feedback)
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-4">
+            <p className="text-sm font-medium whitespace-pre-wrap">{project.clientFeedback}</p>
+          </CardContent>
+        </Card>
+      )}
+
       <Dialog open={completeModalOpen} onOpenChange={setCompleteModalOpen}>
         <DialogContent>
           <DialogHeader>
@@ -432,6 +452,32 @@ export default function ProjectDetailsPage() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setCompleteModalOpen(false)}>Cancel</Button>
             <Button disabled={!completionNotes.trim()} onClick={submitCompletion}>Submit & Publish</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={rejectModalOpen} onOpenChange={setRejectModalOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Request Revisions</DialogTitle>
+            <DialogDescription>
+              Please describe exactly what needs to be changed or fixed before you can approve this delivery.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Feedback Notes <span className="text-destructive">*</span></Label>
+              <textarea 
+                className="flex min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                placeholder="E.g. The logo on the second page is misaligned..."
+                value={feedbackNotes}
+                onChange={(e) => setFeedbackNotes(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRejectModalOpen(false)}>Cancel</Button>
+            <Button variant="destructive" disabled={!feedbackNotes.trim()} onClick={submitRejection}>Return to Active</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

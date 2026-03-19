@@ -24,6 +24,10 @@ export interface Project {
   clientId: string;
   assignedStaffIds: string[];
   files: ProjectFile[];
+  workSummary?: string
+  workLinks?: string[]
+  workFiles?: string[]
+  clientFeedback?: string
   price?: string;
   completionDetails?: CompletionDetails;
 }

@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { ArrowLeft, Save, ShieldAlert, Building2, Briefcase } from "lucide-react"
+import { ArrowLeft, Send, ShieldAlert, Building2, Briefcase } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -54,7 +54,7 @@ export default function NewUserPage() {
             <CardTitle>Account Details</CardTitle>
             <CardDescription className="flex items-center gap-2 mt-1">
               <ShieldAlert className="h-4 w-4 text-yellow-500" />
-              Credentials will be assigned to this user role across the system.
+              Credentials will be generated securely via Magic Link email.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
@@ -78,7 +78,7 @@ export default function NewUserPage() {
             <div className="grid grid-cols-2 gap-4 border-t border-border/50 pt-5 mt-2">
               <div className="space-y-2 col-span-2 sm:col-span-1">
                 <Label htmlFor="role">Account Role</Label>
-                <Select required value={role} onValueChange={setRole}>
+                <Select required value={role} onValueChange={(val) => setRole(val)}>
                   <SelectTrigger className="bg-background/50">
                     <SelectValue placeholder="Select a role..." />
                   </SelectTrigger>
@@ -89,12 +89,6 @@ export default function NewUserPage() {
                   </SelectContent>
                 </Select>
                 <p className="text-[11px] text-muted-foreground mt-1.5">Determines dashboard and data access.</p>
-              </div>
-
-              <div className="space-y-2 col-span-2 sm:col-span-1">
-                <Label htmlFor="password">Default Password</Label>
-                <Input id="password" type="text" defaultValue="TempPassword123!" required className="bg-background/50 font-mono text-sm" />
-                <p className="text-[11px] text-muted-foreground mt-1.5">Share this with the user securely.</p>
               </div>
             </div>
 
@@ -122,7 +116,7 @@ export default function NewUserPage() {
               Cancel
             </Button>
             <Button type="submit">
-              <Save className="mr-2 h-4 w-4" /> Provision Account
+              <Send className="mr-2 h-4 w-4" /> Send Invite Link
             </Button>
           </CardFooter>
         </form>
