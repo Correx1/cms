@@ -1,0 +1,37 @@
+
+> noplincms@0.1.0 lint
+> eslint
+
+
+C:\Users\hp\Desktop\noplin cms ew\noplincms\app\(app)\clients\page.tsx
+   5:29  warning  'CardDescription' is defined but never used                      @typescript-eslint/no-unused-vars
+  25:71  error    `'` can be escaped with `&apos;`, `&lsquo;`, `&#39;`, `&rsquo;`  react/no-unescaped-entities
+
+C:\Users\hp\Desktop\noplin cms ew\noplincms\app\(app)\dashboard\client\page.tsx
+  59:20  error  `'` can be escaped with `&apos;`, `&lsquo;`, `&#39;`, `&rsquo;`  react/no-unescaped-entities
+
+C:\Users\hp\Desktop\noplin cms ew\noplincms\app\(app)\dashboard\staff\page.tsx
+  11:10  warning  'ArrowLeft' is defined but never used     @typescript-eslint/no-unused-vars
+  11:21  warning  'CheckCircle2' is defined but never used  @typescript-eslint/no-unused-vars
+  11:35  warning  'Activity' is defined but never used      @typescript-eslint/no-unused-vars
+  11:59  warning  'Edit' is defined but never used          @typescript-eslint/no-unused-vars
+  11:65  warning  'User' is defined but never used          @typescript-eslint/no-unused-vars
+  11:99  warning  'Building2' is defined but never used     @typescript-eslint/no-unused-vars
+
+C:\Users\hp\Desktop\noplin cms ew\noplincms\app\(app)\projects\new\page.tsx
+  5:10  warning  'mockStaff' is defined but never used  @typescript-eslint/no-unused-vars
+
+C:\Users\hp\Desktop\noplin cms ew\noplincms\app\(app)\projects\page.tsx
+  6:29  warning  'CardDescription' is defined but never used  @typescript-eslint/no-unused-vars
+  6:69  warning  'CardFooter' is defined but never used       @typescript-eslint/no-unused-vars
+  9:77  warning  'ArrowRight' is defined but never used       @typescript-eslint/no-unused-vars
+
+C:\Users\hp\Desktop\noplin cms ew\noplincms\app\(app)\staff\page.tsx
+  5:29  warning  'CardDescription' is defined but never used  @typescript-eslint/no-unused-vars
+  8:16  warning  'Users' is defined but never used            @typescript-eslint/no-unused-vars
+
+C:\Users\hp\Desktop\noplin cms ew\noplincms\lib\auth-context.tsx
+  27:33  warning  '_password' is defined but never used  @typescript-eslint/no-unused-vars
+
+✖ 16 problems (2 errors, 14 warnings)
+
