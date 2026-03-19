@@ -5,14 +5,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { ArrowLeft, Save, ShieldAlert } from "lucide-react"
+import { ArrowLeft, Save, ShieldAlert, Building2, Briefcase } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { useState } from "react"
 
 export default function NewUserPage() {
   const { user } = useAuth()
   const router = useRouter()
+  const [role, setRole] = useState("staff")
 
   if (user?.role !== "admin") {
     // Fast-fail for unauthorized UI access
@@ -67,11 +69,16 @@ export default function NewUserPage() {
                 <Input id="email" type="email" placeholder="emily@agency.com" required className="bg-background/50" />
               </div>
             </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="phone">Phone Number</Label>
+              <Input id="phone" type="tel" placeholder="+1 (555) 000-0000" className="bg-background/50" />
+            </div>
             
             <div className="grid grid-cols-2 gap-4 border-t border-border/50 pt-5 mt-2">
               <div className="space-y-2 col-span-2 sm:col-span-1">
                 <Label htmlFor="role">Account Role</Label>
-                <Select required defaultValue="staff">
+                <Select required value={role} onValueChange={setRole}>
                   <SelectTrigger className="bg-background/50">
                     <SelectValue placeholder="Select a role..." />
                   </SelectTrigger>
@@ -90,6 +97,24 @@ export default function NewUserPage() {
                 <p className="text-[11px] text-muted-foreground mt-1.5">Share this with the user securely.</p>
               </div>
             </div>
+
+            {role === "client" && (
+              <div className="grid grid-cols-1 gap-4 border-t border-border/50 pt-5 mt-2 bg-primary/5 p-4 rounded-lg">
+                <div className="space-y-2">
+                  <Label htmlFor="company" className="flex items-center gap-1.5"><Building2 className="h-3.5 w-3.5"/> Company Name</Label>
+                  <Input id="company" placeholder="E.g. Acme Corp" required className="bg-background/80" />
+                </div>
+              </div>
+            )}
+
+            {role === "staff" && (
+              <div className="grid grid-cols-1 gap-4 border-t border-border/50 pt-5 mt-2 bg-primary/5 p-4 rounded-lg">
+                <div className="space-y-2">
+                  <Label htmlFor="department" className="flex items-center gap-1.5"><Briefcase className="h-3.5 w-3.5"/> Job Title / Department</Label>
+                  <Input id="department" placeholder="E.g. UI/UX Designer, Senior Web Developer" required className="bg-background/80" />
+                </div>
+              </div>
+            )}
             
           </CardContent>
           <CardFooter className="flex justify-end gap-2 border-t border-border/50 pt-4 bg-muted/20 pb-4">
