@@ -56,14 +56,12 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center px-4 py-8 md:p-8">
-      <div className="absolute top-4 left-4 md:top-8 md:left-8 flex items-center gap-2">
-        <Image src="/logo.png" alt="Agency CRM" width={40} height={40} className="w-10 h-10 object-contain" />
-      </div>
+    
 
       <div className="w-full max-w-sm sm:max-w-md animate-in fade-in zoom-in duration-500 flex flex-col items-center">
         
         <div className="text-center mb-6">
-          <Image src="/logo.png" alt="Agency CRM Logo" width={64} height={64} className="w-16 h-16 object-contain mx-auto mb-4" />
+          <Image src="/logo.png" alt="Agency CRM Logo" width={100} height={100} className="w-16 h-16 object-contain mx-auto mb-4" />
           <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Welcome back</h1>
           <p className="text-muted-foreground mt-2 text-sm md:text-base">Sign in to your secure portal</p>
         </div>
@@ -72,10 +70,7 @@ export default function LoginPage() {
           {sentMagicLink ? (
              <div className="p-8 pb-10 text-center flex flex-col items-center">
                 <ShieldCheck className="h-12 w-12 text-emerald-500 mb-4" />
-                <CardTitle className="text-xl mb-2">Check your Email</CardTitle>
-                <p className="text-sm text-muted-foreground leading-relaxed">
-                  We securely dispatched a magic link to <span className="font-semibold text-foreground">{email}</span>. Click it to authorize your session securely natively!
-                </p>
+               
                 <Button variant="outline" className="mt-6 w-full" onClick={() => setSentMagicLink(false)}>Back to Login</Button>
              </div>
           ) : (
@@ -127,7 +122,7 @@ export default function LoginPage() {
                   </Button>
                 </div>
                 
-                {loginMode === "password" ? (
+                {/* {loginMode === "password" ? (
                   <p className="text-center text-xs text-muted-foreground mt-2">
                     Prefer passwordless? <button type="button" onClick={() => setLoginMode("magic_link")} className="text-primary hover:underline font-medium">Use Magic Link</button>
                   </p>
@@ -135,7 +130,7 @@ export default function LoginPage() {
                   <p className="text-center text-xs text-muted-foreground mt-2">
                     Have a password? <button type="button" onClick={() => setLoginMode("password")} className="text-primary hover:underline font-medium">Sign in traditionally</button>
                   </p>
-                )}
+                )} */}
               </CardContent>
             </form>
           )}
