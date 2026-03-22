@@ -71,8 +71,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { data: { session } } = await supabase.auth.getSession()
 
       if (session?.user) {
-        const mapped = await fetchProfile(session.user.id, session.user.email ?? "")
-        if (mounted && mapped) setUser(mapped)
+        const { id, email } = session.user
+        let mapped = await fetchProfile(id, email ?? "")
+
+        if (!mapped) {
+          // Profile is missing — try to auto-create it via server API
+          await ensureProfile(
+            session.user.user_metadata?.full_name ?? session.user.user_metadata?.name,
+            session.user.user_metadata?.role
+          )
+          mapped = await fetchProfile(id, email ?? "")
+        }
+
+        if (mounted && mapped) {
+          setUser(mapped)
+          // If the user is on the login page with an active session, redirect them
+          if (typeof window !== 'undefined' && window.location.pathname === '/') {
+            router.replace(`/dashboard/${mapped.role}`)
+          }
+        }
       }
 
       if (mounted) setLoading(false)

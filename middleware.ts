@@ -1,4 +1,4 @@
-import { createServerClient, type CookieOptions } from '@supabase/ssr'
+import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 // Paths that require an authenticated session
@@ -11,11 +11,8 @@ const PROTECTED_PREFIXES = [
   '/users',
 ]
 
-// Paths that are only for unauthenticated users (redirect away if already logged in)
-const AUTH_ONLY_PATHS = ['/']
-
-// Paths that the middleware should leave completely alone
-const PUBLIC_PATHS = ['/auth/callback', '/setup-password']
+// Paths that bypass middleware completely (auth utilities)
+const BYPASS_PATHS = ['/auth/callback', '/setup-password', '/api/']
 
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
@@ -24,8 +21,8 @@ export async function middleware(request: NextRequest) {
 
   const pathname = request.nextUrl.pathname
 
-  // Don't touch public/auth utility routes
-  if (PUBLIC_PATHS.some((p) => pathname.startsWith(p))) {
+  // Always bypass auth utility paths — never redirect these
+  if (BYPASS_PATHS.some((p) => pathname.startsWith(p))) {
     return supabaseResponse
   }
 
@@ -50,23 +47,21 @@ export async function middleware(request: NextRequest) {
     }
   )
 
-  // Always call getUser() — this refreshes the session cookie when needed
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  // getUser() also refreshes the session cookie when needed
+  const { data: { user } } = await supabase.auth.getUser()
 
   const isProtected = PROTECTED_PREFIXES.some((p) => pathname.startsWith(p))
-  const isAuthOnly = AUTH_ONLY_PATHS.includes(pathname)
+  const isLoginPage = pathname === '/'
 
-  // Not logged in and trying to reach a protected page → login
+  // Not authenticated → block protected routes, redirect to login
   if (!user && isProtected) {
-    const loginUrl = new URL('/', request.url)
-    loginUrl.searchParams.set('redirected', '1')
-    return NextResponse.redirect(loginUrl)
+    return NextResponse.redirect(new URL('/', request.url))
   }
 
-  // Already logged in and on the login page → redirect to their dashboard
-  if (user && isAuthOnly) {
+  // Authenticated → redirect away from login page to dashboard
+  // Only do this if they have a valid profile — otherwise let the
+  // client-side auth-context handle profile creation and redirect
+  if (user && isLoginPage) {
     const { data: profile } = await supabase
       .from('profiles')
       .select('role')
@@ -74,11 +69,14 @@ export async function middleware(request: NextRequest) {
       .single()
 
     if (profile?.role) {
+      // Has a profile — send them straight to their dashboard
       return NextResponse.redirect(new URL(`/dashboard/${profile.role}`, request.url))
     }
 
-    // No profile yet (newly invited user) — send to setup-password
-    return NextResponse.redirect(new URL('/setup-password', request.url))
+    // ⚠️ No profile yet: do NOT redirect to /setup-password here.
+    // Let the request through to the login page; auth-context will
+    // call /api/ensure-profile to create the row and then redirect.
+    return supabaseResponse
   }
 
   return supabaseResponse
@@ -86,9 +84,6 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    /*
-     * Match all request paths EXCEPT static files and Next.js internals
-     */
     '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 }
