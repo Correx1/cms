@@ -47,12 +47,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let mounted = true
 
     // ── Helper: load profile from DB ──────────────────────────────────────────
-    async function fetchProfile(userId: string, email: string): Promise<User | null> {
-      const { data: profile } = await supabase
+    // Returns: User object if found, null if no row exists, 'error' if DB errored
+    async function fetchProfile(userId: string, email: string): Promise<User | null | 'error'> {
+      const { data: profile, error } = await supabase
         .from("profiles")
         .select("*")
         .eq("id", userId)
         .single()
+
+      if (error) {
+        // PGRST116 = "no rows returned" — profile doesn't exist yet, safe to create
+        if (error.code === 'PGRST116') return null
+        // Any other error (e.g. 500 from recursive RLS) — don't trigger creation loop
+        console.error('[auth] fetchProfile DB error:', error.code, error.message)
+        return 'error'
+      }
 
       if (!profile) return null
 
@@ -72,20 +81,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (session?.user) {
         const { id, email } = session.user
-        let mapped = await fetchProfile(id, email ?? "")
+        let result = await fetchProfile(id, email ?? "")
 
-        if (!mapped) {
-          // Profile is missing — try to auto-create it via server API
+        // Only attempt creation when the row simply doesn't exist (null)
+        // Skip if there was a real DB error ('error') — avoids creation loops
+        if (result === null) {
           await ensureProfile(
             session.user.user_metadata?.full_name ?? session.user.user_metadata?.name,
             session.user.user_metadata?.role
           )
-          mapped = await fetchProfile(id, email ?? "")
+          result = await fetchProfile(id, email ?? "")
         }
 
+        const mapped = result !== 'error' ? result : null
         if (mounted && mapped) {
           setUser(mapped)
-          // If the user is on the login page with an active session, redirect them
+          // Already-authenticated user visiting login page → send to dashboard
           if (typeof window !== 'undefined' && window.location.pathname === '/') {
             router.replace(`/dashboard/${mapped.role}`)
           }
@@ -112,31 +123,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if ((event === "SIGNED_IN" || event === "TOKEN_REFRESHED") && session?.user) {
         const { id, email } = session.user
-        let mapped = await fetchProfile(id, email ?? "")
+        let result = await fetchProfile(id, email ?? "")
 
-        if (!mapped) {
-          // Profile row is missing — create it via server API (bypasses RLS)
+        // Only create profile if the row is genuinely missing (null), not on DB errors
+        if (result === null) {
           await ensureProfile(
             session.user.user_metadata?.full_name ?? session.user.user_metadata?.name,
             session.user.user_metadata?.role
           )
-          // Re-fetch after creation
-          mapped = await fetchProfile(id, email ?? "")
+          result = await fetchProfile(id, email ?? "")
         }
+
+        const mapped = result !== 'error' ? result : null
 
         if (mapped) {
           setUser(mapped)
           if (event === "SIGNED_IN") {
             router.push(dashboardPath(mapped.role!))
           }
-        } else {
-          // Profile could not be created (service role key missing, SQL not run)
-          // Redirect to setup-password so user can at least set a password;
-          // the setup-password page also calls ensure-profile before redirecting
-          if (event === "SIGNED_IN") {
-            router.push("/setup-password")
-          }
+        } else if (result !== 'error' && event === "SIGNED_IN") {
+          // Profile truly doesn't exist and couldn't be auto-created
+          // (service role key needed — see .env.local)
+          router.push("/setup-password")
         }
+        // If result === 'error': DB is broken (run the SQL schema reset)
+        // — don't redirect anywhere, user stays on current page
       }
     })
 
