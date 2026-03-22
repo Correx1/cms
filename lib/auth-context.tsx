@@ -18,6 +18,10 @@ export interface User {
 interface AuthContextType {
   user: User | null
   loading: boolean
+  /** True whenever there is an active Supabase session, even if the profile
+   *  couldn't be loaded (e.g. DB error). Used in layout to prevent redirect
+   *  loops when the profile fetch fails. */
+  hasSession: boolean
   logout: () => Promise<void>
 }
 
@@ -27,27 +31,32 @@ function dashboardPath(role: string) {
   return `/dashboard/${role}`
 }
 
-/** Call /api/ensure-profile to create the row (bypasses RLS via service role) */
+/** Create profile row via server-side API (bypasses RLS) */
 async function ensureProfile(name?: string, role?: string): Promise<void> {
-  await fetch('/api/ensure-profile', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, role }),
-    credentials: 'include',
-  })
+  try {
+    await fetch('/api/ensure-profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, role }),
+      credentials: 'include',
+    })
+  } catch {
+    // Non-fatal — the profile might already exist
+  }
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
+  const [hasSession, setHasSession] = useState(false)
   const router = useRouter()
   const supabase = createClient()
 
   useEffect(() => {
     let mounted = true
 
-    // ── Helper: load profile from DB ──────────────────────────────────────────
-    // Returns: User object if found, null if no row exists, 'error' if DB errored
+    // ── Helper: fetch profile row from DB ─────────────────────────────────────
+    // Returns User if found | null if row missing (PGRST116) | 'error' on DB errors
     async function fetchProfile(userId: string, email: string): Promise<User | null | 'error'> {
       const { data: profile, error } = await supabase
         .from("profiles")
@@ -56,10 +65,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .single()
 
       if (error) {
-        // PGRST116 = "no rows returned" — profile doesn't exist yet, safe to create
-        if (error.code === 'PGRST116') return null
-        // Any other error (e.g. 500 from recursive RLS) — don't trigger creation loop
-        console.error('[auth] fetchProfile DB error:', error.code, error.message)
+        if (error.code === 'PGRST116') return null   // no row — safe to create
+        console.error('[auth] fetchProfile error:', error.code, error.message)
         return 'error'
       }
 
@@ -75,81 +82,80 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    // ── On mount: hydrate session ─────────────────────────────────────────────
-    async function initializeSession() {
-      const { data: { session } } = await supabase.auth.getSession()
+    // ── Single source of truth: onAuthStateChange ─────────────────────────────
+    // INITIAL_SESSION fires immediately on subscribe with the cached session.
+    // This is faster than calling getSession() separately and avoids the
+    // race condition where both initializeSession + listener update state.
 
-      if (session?.user) {
-        const { id, email } = session.user
-        let result = await fetchProfile(id, email ?? "")
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (!mounted) return
 
-        // Only attempt creation when the row simply doesn't exist (null)
-        // Skip if there was a real DB error ('error') — avoids creation loops
-        if (result === null) {
-          await ensureProfile(
-            session.user.user_metadata?.full_name ?? session.user.user_metadata?.name,
-            session.user.user_metadata?.role
-          )
-          result = await fetchProfile(id, email ?? "")
+        // ── Signed out ────────────────────────────────────────────────────────
+        if (event === "SIGNED_OUT") {
+          setUser(null)
+          setHasSession(false)
+          setLoading(false)
+          router.push("/")
+          return
         }
 
-        const mapped = result !== 'error' ? result : null
-        if (mounted && mapped) {
-          setUser(mapped)
-          // Already-authenticated user visiting login page → send to dashboard
-          if (typeof window !== 'undefined' && window.location.pathname === '/') {
-            router.replace(`/dashboard/${mapped.role}`)
-          }
-        }
-      }
-
-      if (mounted) setLoading(false)
-    }
-
-    initializeSession()
-
-    // ── Auth state listener ───────────────────────────────────────────────────
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === "SIGNED_OUT") {
-        setUser(null)
-        router.push("/")
-        return
-      }
-
-      if (event === "PASSWORD_RECOVERY") {
-        router.push("/setup-password")
-        return
-      }
-
-      if ((event === "SIGNED_IN" || event === "TOKEN_REFRESHED") && session?.user) {
-        const { id, email } = session.user
-        let result = await fetchProfile(id, email ?? "")
-
-        // Only create profile if the row is genuinely missing (null), not on DB errors
-        if (result === null) {
-          await ensureProfile(
-            session.user.user_metadata?.full_name ?? session.user.user_metadata?.name,
-            session.user.user_metadata?.role
-          )
-          result = await fetchProfile(id, email ?? "")
-        }
-
-        const mapped = result !== 'error' ? result : null
-
-        if (mapped) {
-          setUser(mapped)
-          if (event === "SIGNED_IN") {
-            router.push(dashboardPath(mapped.role!))
-          }
-        } else if (result !== 'error' && event === "SIGNED_IN") {
-          // Profile truly doesn't exist and couldn't be auto-created
-          // (service role key needed — see .env.local)
+        // ── Password recovery ─────────────────────────────────────────────────
+        if (event === "PASSWORD_RECOVERY") {
+          setLoading(false)
           router.push("/setup-password")
+          return
         }
-        // If result === 'error': DB is broken (run the SQL schema reset)
-        // — don't redirect anywhere, user stays on current page
+
+        // ── Has a session: INITIAL_SESSION | SIGNED_IN | TOKEN_REFRESHED ──────
+        if (session?.user) {
+          setHasSession(true)
+          const { id, email } = session.user
+
+          let result = await fetchProfile(id, email ?? "")
+
+          // Only attempt auto-creation when the row genuinely doesn't exist
+          if (result === null) {
+            await ensureProfile(
+              session.user.user_metadata?.full_name ?? session.user.user_metadata?.name,
+              session.user.user_metadata?.role
+            )
+            result = await fetchProfile(id, email ?? "")
+          }
+
+          const mapped = result !== 'error' ? result : null
+
+          if (mounted) {
+            setUser(mapped)
+            setLoading(false)
+
+            if (event === "SIGNED_IN") {
+              // Active sign-in: push to the correct dashboard
+              if (mapped) {
+                router.push(dashboardPath(mapped.role!))
+              } else if (result !== 'error') {
+                // Profile truly missing and couldn't be created
+                router.push("/setup-password")
+              }
+            } else if (event === "INITIAL_SESSION" && mapped) {
+              // Page refresh: if the user landed on the login page, send them home
+              if (typeof window !== 'undefined' && window.location.pathname === '/') {
+                router.replace(dashboardPath(mapped.role!))
+              }
+            }
+            // TOKEN_REFRESHED: silently update user, no redirect needed
+          }
+
+        } else {
+          // INITIAL_SESSION with no session → not logged in
+          if (mounted) {
+            setUser(null)
+            setHasSession(false)
+            setLoading(false)
+          }
+        }
       }
-    })
+    )
 
     return () => {
       mounted = false
@@ -162,7 +168,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, logout }}>
+    <AuthContext.Provider value={{ user, loading, hasSession, logout }}>
       {children}
     </AuthContext.Provider>
   )

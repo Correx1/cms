@@ -12,15 +12,18 @@ export default function DashboardLayout({
 }: {
   children: React.ReactNode
 }) {
-  const { user, loading } = useAuth()
+  const { user, loading, hasSession } = useAuth()
   const router = useRouter()
 
   useEffect(() => {
-    // Only redirect after auth state has fully hydrated
-    if (!loading && !user) {
+    // Redirect to login only when we know for sure there is no session.
+    // Do NOT redirect just because user is null — that can happen when the
+    // profile fetch errors (DB issue). hasSession is false only when
+    // onAuthStateChange confirms there is no active Supabase session.
+    if (!loading && !hasSession) {
       router.replace("/")
     }
-  }, [user, loading, router])
+  }, [hasSession, loading, router])
 
   // Show a spinner while auth is loading — prevents the flash to login
   if (loading) {
