@@ -8,10 +8,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
-import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select"
 import { CheckCircle2, AlertCircle, Clock, Receipt, Loader2 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
-import { toast } from "sonner"
 
 export default function InvoicesPage() {
   const { user } = useAuth()
@@ -21,13 +19,11 @@ export default function InvoicesPage() {
   const [invoices, setInvoices] = useState<any[]>([])
 
   const fetchInvoices = async () => {
-    let query = supabase.from('invoices').select(`
-      *,
-      client:profiles!invoices_client_id_fkey(company, name),
-      project:projects!invoices_project_id_fkey(title)
-    `).order('issue_date', { ascending: false })
+    let query = supabase.from('projects').select(`
+      id, created_at, deadline, price, status, title, details,
+      client:profiles!projects_client_id_fkey(company, name)
+    `).order('created_at', { ascending: false })
 
-    // RLS handles client vs admin natively in PostgreSQL, but we'll sort results
     if (user?.role === "client") {
       query = query.eq('client_id', user.id)
     }
@@ -35,7 +31,24 @@ export default function InvoicesPage() {
     const { data } = await query
 
     if (data) {
-      setInvoices(data)
+      const mappedInvoices = data.map(p => {
+        let invStatus = "pending"
+        if (p.status === "completed" || p.status === "approved") invStatus = "paid"
+        if (p.deadline && new Date(p.deadline) < new Date() && invStatus !== "paid") invStatus = "overdue"
+
+        return {
+          id: `INV-${p.id.split('-')[0].toUpperCase()}`,
+          project_id: p.id,
+          client: p.client,
+          project: { title: p.title },
+          description: p.details ? p.details.substring(0, 60) + "..." : "Standard Scope Registration",
+          issue_date: p.created_at,
+          due_date: p.deadline || new Date(new Date(p.created_at).getTime() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+          amount: parseFloat((p.price || "0").replace(/[^0-9.]/g, '')) || 0,
+          status: invStatus
+        }
+      })
+      setInvoices(mappedInvoices)
     }
     setLoading(false)
   }
@@ -44,20 +57,7 @@ export default function InvoicesPage() {
     let mounted = true
     if (user?.id) fetchInvoices()
     return () => { mounted = false }
-  }, [user, supabase])
-
-  const handleStatusChange = async (id: string, newStatus: string) => {
-    const previousInvoices = [...invoices]
-    setInvoices(prev => prev.map(inv => inv.id === id ? { ...inv, status: newStatus } : inv))
-    
-    const { error } = await supabase.from('invoices').update({ status: newStatus }).eq('id', id)
-    if (error) {
-      setInvoices(previousInvoices)
-      toast.error("Execution Refused: RLS Violation")
-    } else {
-      toast.success("Database Vector overwritten natively")
-    }
-  }
+  }, [user?.id])
 
   if (user?.role === "staff") return (
      <div className="flex h-[50vh] flex-col items-center justify-center space-y-4">
@@ -144,29 +144,9 @@ export default function InvoicesPage() {
                         <TableCell className="text-muted-foreground text-sm font-semibold py-4">{new Date(invoice.due_date).toLocaleDateString()}</TableCell>
                         <TableCell className="text-right font-bold py-4 text-base">${Number(invoice.amount).toLocaleString()}</TableCell>
                         <TableCell className="py-4">
-                           {user?.role === "admin" ? (
-                              <Select value={invoice.status} onValueChange={(val) => handleStatusChange(invoice.id, val)}>
-                                <SelectTrigger className="w-[120px] h-9 font-bold bg-background shadow-sm border-border/60">
-                                  <span className="capitalize flex items-center gap-1.5 text-xs">
-                                     {invoice.status === "paid" && <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500"/>}
-                                     {invoice.status === "pending" && <Clock className="h-3.5 w-3.5 text-blue-500"/>}
-                                     {invoice.status === "overdue" && <AlertCircle className="h-3.5 w-3.5 text-destructive"/>}
-                                     {invoice.status}
-                                  </span>
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="paid" className="cursor-pointer font-bold text-emerald-600 dark:text-emerald-400">Paid Pipeline</SelectItem>
-                                  <SelectItem value="pending" className="cursor-pointer font-bold text-blue-600 dark:text-blue-400">Pending</SelectItem>
-                                  <SelectItem value="overdue" className="cursor-pointer font-bold text-destructive">Overdue</SelectItem>
-                                </SelectContent>
-                              </Select>
-                           ) : (
-                             <>
-                               {invoice.status === "paid" && <Badge variant="outline" className="text-emerald-500 border-emerald-500/20 bg-emerald-500/10 font-bold shadow-sm uppercase text-[10px]"><CheckCircle2 className="h-3 w-3 mr-1"/> PAID RESOLVED</Badge>}
-                               {invoice.status === "pending" && <Badge variant="outline" className="text-blue-500 border-blue-500/20 bg-blue-500/10 font-bold shadow-sm uppercase text-[10px]"><Clock className="h-3 w-3 mr-1"/> PENDING QUEUE</Badge>}
-                               {invoice.status === "overdue" && <Badge variant="outline" className="text-destructive border-destructive/20 bg-destructive/10 font-bold shadow-sm uppercase text-[10px]"><AlertCircle className="h-3 w-3 mr-1"/> OVERDUE ALERT</Badge>}
-                             </>
-                           )}
+                           {invoice.status === "paid" && <Badge variant="outline" className="text-emerald-500 border-emerald-500/20 bg-emerald-500/10 font-bold shadow-sm uppercase text-[10px]"><CheckCircle2 className="h-3 w-3 mr-1"/> PAID</Badge>}
+                           {invoice.status === "pending" && <Badge variant="outline" className="text-blue-500 border-blue-500/20 bg-blue-500/10 font-bold shadow-sm uppercase text-[10px]"><Clock className="h-3 w-3 mr-1"/> PENDING</Badge>}
+                           {invoice.status === "overdue" && <Badge variant="outline" className="text-destructive border-destructive/20 bg-destructive/10 font-bold shadow-sm uppercase text-[10px]"><AlertCircle className="h-3 w-3 mr-1"/> OVERDUE</Badge>}
                         </TableCell>
                         <TableCell className="text-right flex items-center justify-end gap-2 pr-6 py-4">
                           <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"><Receipt className="h-4 w-4"/></Button>

@@ -1,4 +1,3 @@
-/* eslint-disable react-hooks/set-state-in-effect */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 "use client"
 
@@ -12,7 +11,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { FolderKanban, Upload, FileText, Download, Calendar, Trash2, Loader2, Link as LinkIcon } from "lucide-react"
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { toast } from "sonner"
 
@@ -31,27 +30,31 @@ export default function StaffDashboard() {
   const [completionFiles, setCompletionFiles] = useState<File[]>([])
   const [submitting, setSubmitting] = useState(false)
   
-  const fetchProjects = async () => {
-    if (!user) return
-    const { data } = await supabase
-      .from('project_assignments')
-      .select(`
-        project_id,
-        projects (*, client:profiles!projects_client_id_fkey(name))
-      `)
-      .eq('user_id', user.id)
+  const fetchProjects = useCallback(async () => {
+    if (!user?.id) return
+    try {
+      const { data } = await supabase
+        .from('project_assignments')
+        .select(`
+          project_id,
+          projects (*, client:profiles!projects_client_id_fkey(name))
+        `)
+        .eq('user_id', user.id)
 
-    if (data) {
-      setAssignedProjects(data.map((d: any) => d.projects).filter(Boolean))
+      if (data) {
+        setAssignedProjects(data.map((d: any) => d.projects).filter(Boolean))
+      }
+    } catch (err) {
+      console.error('Staff projects fetch error:', err)
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
-  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id])
 
   useEffect(() => {
-    let mounted = true
-    if (user?.id) fetchProjects()
-    return () => { mounted = false }
-  }, [user, supabase])
+    fetchProjects()
+  }, [fetchProjects])
 
   const upcomingDeadlines = [...assignedProjects]
     .filter(p => p.status !== "completed")
@@ -97,45 +100,51 @@ export default function StaffDashboard() {
     if (!projectToComplete) return
     setSubmitting(true)
 
-    // Parallel File Upload to Secure Storage
-    const uploadedFilesData = []
+    // Upload files to storage client-side (if any)
+    const uploadedFilesData: {name: string, url: string, type: string, uploadedAt: string}[] = []
     for (const file of completionFiles) {
       const fileName = `${Date.now()}_${file.name.replace(/\s+/g, '_')}`
       const { data, error } = await supabase.storage.from('deliverables_vault').upload(`projects/${projectToComplete}/${fileName}`, file)
       if (!error && data) {
         const { data: { publicUrl } } = supabase.storage.from('deliverables_vault').getPublicUrl(data.path)
-        uploadedFilesData.push({
-          name: file.name,
-          url: publicUrl,
-          type: file.type,
-          uploadedAt: new Date().toISOString()
-        })
+        uploadedFilesData.push({ name: file.name, url: publicUrl, type: file.type, uploadedAt: new Date().toISOString() })
       }
     }
 
     const compiledLinks = completionLinks.split('\n').map(l => l.trim()).filter(Boolean)
 
-    const completionPayload = {
-      status: 'completed',
-      deliverables_summary: completionNotes,
-      deliverables_links: compiledLinks,
-      deliverables_files: uploadedFilesData
-    }
+    // Use server-side API (bypasses RLS) so the update always succeeds
+    const res = await fetch('/api/projects/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        projectId: projectToComplete,
+        deliverables_summary: completionNotes,
+        deliverables_links: compiledLinks,
+        deliverables_files: uploadedFilesData,
+      }),
+    })
 
-    const { error } = await supabase.from('projects').update(completionPayload).eq('id', projectToComplete)
-
-    if (error) {
-      toast.error("Failed to complete project")
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      toast.error(err.error ?? 'Failed to complete project')
     } else {
-      toast.success("Project completed successfully!")
+      toast.success('Project completed successfully!')
+      const completionPayload = {
+        status: 'completed' as const,
+        deliverables_summary: completionNotes,
+        deliverables_links: compiledLinks,
+        deliverables_files: uploadedFilesData,
+      }
       setAssignedProjects(prev => prev.map(p => p.id === projectToComplete ? { ...p, ...completionPayload } : p))
     }
 
     setSubmitting(false)
     setCompleteModalOpen(false)
     setProjectToComplete(null)
-    setCompletionNotes("")
-    setCompletionLinks("")
+    setCompletionNotes('')
+    setCompletionLinks('')
     setCompletionFiles([])
   }
 

@@ -1,18 +1,19 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client"
 
 import { useAuth } from "@/lib/auth-context"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Plus, Search, UserCog, User, ChevronDown, ListChecks, Edit, Loader2, Save } from "lucide-react"
+import { Plus, UserCog, Search, ChevronDown, ListChecks, Edit, User, Loader2, Save, Trash2 } from "lucide-react"
 import Link from "next/link"
 import { Input } from "@/components/ui/input"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { useRouter } from "next/navigation"
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { toast } from "sonner"
 
@@ -26,44 +27,39 @@ export default function StaffPage() {
   const [searchQuery, setSearchQuery] = useState("")
   
   const [editStaff, setEditStaff] = useState<any | null>(null)
-  const [editFormData, setEditFormData] = useState({ name: "", email: "", role: "", department: "" })
+  const [editFormData, setEditFormData] = useState({ name: "", email: "", role: "", job_title: "" })
   const [editing, setEditing] = useState(false)
 
-  const fetchStaff = async () => {
-    const { data: profilesData } = await supabase
-      .from('profiles')
-      .select(`
-        id, name, email, role, department, created_at,
-        assignments:project_assignments (
-          projects (id, title, status)
-        )
-      `)
-      .in('role', ['admin', 'staff'])
-      .order('created_at', { ascending: false })
-
-    if (profilesData) {
-      const formatted = profilesData.map(s => {
-        // Unpack nested many-to-many
-        const validProjects = s.assignments
-          ?.map((a: any) => a.projects)
-          .filter(Boolean) || []
-
-        return {
-          ...s,
-          assignedTasks: validProjects.filter((p: any) => p.status !== "completed"),
-          completedTasks: validProjects.filter((p: any) => p.status === "completed")
-        }
+  const fetchStaff = useCallback(async () => {
+    try {
+      const res = await fetch('/api/admin/profiles?roles=admin,staff', {
+        credentials: 'include',
+        cache: 'no-store'
       })
-      setStaffList(formatted)
+      if (res.ok) {
+        const json = await res.json()
+        const formatted = (json.profiles ?? []).map((s: any) => {
+          const validProjects = s.assignments
+            ?.map((a: any) => a.projects)
+            .filter(Boolean) || []
+          return {
+            ...s,
+            assignedTasks: validProjects.filter((p: any) => p.status !== 'completed'),
+            completedTasks: validProjects.filter((p: any) => p.status === 'completed')
+          }
+        })
+        setStaffList(formatted)
+      }
+    } catch (err) {
+      console.error("Fetch staff error:", err)
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
-  }
+  }, [])
 
   useEffect(() => {
-    let mounted = true
     if (user?.role === "admin") fetchStaff()
-    return () => { mounted = false }
-  }, [user, supabase])
+  }, [user?.role, fetchStaff])
 
   const visibleStaff = staffList.filter(s => 
     s.name?.toLowerCase().includes(searchQuery.toLowerCase()) || 
@@ -74,11 +70,23 @@ export default function StaffPage() {
   if (user?.role !== "admin") {
     return (
       <div className="flex flex-col items-center justify-center h-[50vh] text-center">
-        <h2 className="text-2xl font-bold">Unauthorized Configuration</h2>
-        <p className="text-muted-foreground mt-2">Only administrators can view and mutate internal structural handlers.</p>
+        <h2 className="text-2xl font-bold">Access Restricted</h2>
+        <p className="text-muted-foreground mt-2">Only administrators can view and manage staff members.</p>
         <Button className="mt-6" onClick={() => router.back()}>Cancel Operation</Button>
       </div>
     )
+  }
+
+  const handleDeleteStaff = async (id: string) => {
+    if (!window.confirm("Are you sure you want to delete this staff member?")) return
+    const { error } = await supabase.from('profiles').delete().eq('id', id)
+    if (error) {
+      toast.error("Failed to delete staff member")
+      console.error(error)
+    } else {
+      toast.success("Staff member deleted successfully")
+      setStaffList(prev => prev.filter(s => s.id !== id))
+    }
   }
 
   const handleOpenEdit = (staff: any) => {
@@ -87,7 +95,7 @@ export default function StaffPage() {
       name: staff.name || "", 
       email: staff.email || "", 
       role: staff.role || "staff",
-      department: staff.department || ""
+      job_title: staff.job_title || ""
     })
   }
 
@@ -99,8 +107,7 @@ export default function StaffPage() {
     const payload = {
       name: editFormData.name,
       role: editFormData.role,
-      department: editFormData.department
-      // Admin email is not modified via direct SQL update to `profiles` strictly unless tracking. User handles Auth.
+      job_title: editFormData.job_title
     }
 
     const { error } = await supabase.from('profiles').update({ ...payload, email: editFormData.email }).eq('id', editStaff.id)
@@ -127,12 +134,12 @@ export default function StaffPage() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Internal Agency Operators</h1>
-          <p className="text-sm md:text-base text-muted-foreground mt-1">Manage global execution nodes and parameter access boundaries.</p>
+          <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Staff Members</h1>
+          <p className="text-sm md:text-base text-muted-foreground mt-1">View and manage your team members and their project assignments.</p>
         </div>
         <Button className="shadow-sm shadow-primary/20 w-full sm:w-auto font-semibold" asChild>
           <Link href="/users/new">
-            <Plus className="mr-2 h-4 w-4" /> Generate Identity Row
+            <Plus className="mr-2 h-4 w-4" /> Add New Staff
           </Link>
         </Button>
       </div>
@@ -142,13 +149,13 @@ export default function StaffPage() {
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
             <CardTitle className="text-base md:text-lg font-medium flex items-center gap-2">
               <UserCog className="h-5 w-5 text-muted-foreground" />
-              Organizational Handler Pipeline
+              Team Overview
             </CardTitle>
             <div className="relative w-full sm:w-72">
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
                 type="search"
-                placeholder="Parse exact staff constraints..."
+                placeholder="Search by name, email or role..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 className="w-full pl-9 bg-background/50 h-9 font-medium shadow-sm"
@@ -161,18 +168,18 @@ export default function StaffPage() {
             <Table>
               <TableHeader className="bg-muted/30">
                 <TableRow className="border-border/50">
-                  <TableHead className="w-[250px] py-4 pl-6 text-sm">Identity Block</TableHead>
-                  <TableHead className="py-4 text-sm hidden sm:table-cell">Global Tier Config</TableHead>
-                  <TableHead className="py-4 text-sm hidden md:table-cell">Nodes Handled</TableHead>
-                  <TableHead className="py-4 text-sm hidden lg:table-cell">Terminated Projects</TableHead>
-                  <TableHead className="py-4 pr-6 text-right text-sm">Native Override</TableHead>
+                  <TableHead className="w-[250px] py-4 pl-6 text-sm">Name</TableHead>
+                  <TableHead className="py-4 text-sm hidden sm:table-cell">Role & Title</TableHead>
+                  <TableHead className="py-4 text-sm hidden md:table-cell">Active Projects</TableHead>
+                  <TableHead className="py-4 text-sm hidden lg:table-cell">Completed</TableHead>
+                  <TableHead className="py-4 pr-6 text-right text-sm">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {visibleStaff.length > 0 ? visibleStaff.map(staff => {
                   const assigned = staff.assignedTasks || []
                   const completed = staff.completedTasks || []
-                  const jobTitle = staff.department || (staff.role === "admin" ? "Director / Overlord" : "Technical Pipeline Exec")
+                  const jobTitle = staff.job_title || (staff.role === "admin" ? "Admin" : "Staff")
 
                   return (
                     <TableRow key={staff.id} className="border-border/50 group hover:bg-muted/30 transition-colors">
@@ -192,7 +199,7 @@ export default function StaffPage() {
                         <div className="flex flex-col items-start gap-1.5 overflow-hidden max-w-[150px]">
                           <span className="font-semibold text-sm truncate w-full">{jobTitle}</span>
                           <Badge variant={staff.role === "admin" ? "default" : "secondary"} className="text-[10px] uppercase. tracking-widest px-1.5 py-0 shadow-sm font-bold">
-                            {staff.role} Rank
+                            {staff.role}
                           </Badge>
                         </div>
                       </TableCell>
@@ -208,7 +215,7 @@ export default function StaffPage() {
                             {assigned.length > 3 && <span className="text-xs text-muted-foreground pl-2 font-medium">+{assigned.length - 3} remaining blocks...</span>}
                           </div>
                         ) : (
-                          <span className="text-sm text-muted-foreground italic font-medium">Idle Constraints</span>
+                          <span className="text-sm text-muted-foreground italic font-medium">No active projects</span>
                         )}
                       </TableCell>
 
@@ -223,7 +230,7 @@ export default function StaffPage() {
                             {completed.length > 3 && <span className="text-xs text-muted-foreground pl-2 font-medium">+{completed.length - 3} drops...</span>}
                           </div>
                         ) : (
-                          <span className="text-sm text-muted-foreground italic font-medium">0 executed pipelines</span>
+                          <span className="text-sm text-muted-foreground italic font-medium">No completed projects</span>
                         )}
                       </TableCell>
 
@@ -232,16 +239,20 @@ export default function StaffPage() {
                           <DropdownMenuTrigger asChild>
                             <Button variant="outline" size="sm" className="h-8 shadow-sm font-semibold">
                               <ListChecks className="mr-2 h-4 w-4 hidden sm:block" />
-                              <span>Bind Context</span>
+                              <span>Actions</span>
                               <ChevronDown className="ml-2 h-3 w-3 opacity-50" />
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-[180px]">
                             <DropdownMenuItem className="cursor-pointer font-medium" asChild>
-                              <Link href={`/staff/${staff.id}`}><User className="mr-2 h-4 w-4" /> Map Physical Profile</Link>
+                              <Link href={`/staff/${staff.id}`}><User className="mr-2 h-4 w-4" /> View Profile</Link>
                             </DropdownMenuItem>
                             <DropdownMenuItem className="cursor-pointer font-medium" onClick={() => handleOpenEdit(staff)}>
-                              <Edit className="mr-2 h-4 w-4" /> Push Literal Update
+                              <Edit className="mr-2 h-4 w-4" /> Edit
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem className="cursor-pointer font-medium text-destructive focus:text-destructive" onClick={() => handleDeleteStaff(staff.id)}>
+                              <Trash2 className="mr-2 h-4 w-4" /> Delete
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
@@ -251,7 +262,7 @@ export default function StaffPage() {
                 }) : (
                   <TableRow>
                     <TableCell colSpan={6} className="h-32 text-center text-muted-foreground text-base">
-                      No structural instances compiled inside global logic hook natively exactly securely.
+                      No staff members found.
                     </TableCell>
                   </TableRow>
                 )}
@@ -265,26 +276,26 @@ export default function StaffPage() {
         <DialogContent className="sm:max-w-md">
           <form onSubmit={submitEdit}>
             <DialogHeader>
-              <DialogTitle>Literal Parameter Override ({editStaff?.name})</DialogTitle>
+              <DialogTitle>Edit Staff: {editStaff?.name}</DialogTitle>
               <DialogDescription>
-                Alter internal JSON bindings updating global PostgREST routes flawlessly directly accurately exactly.
+                Update this staff member information.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-4">
               <div className="space-y-2">
-                <Label htmlFor="name">Target Identifier Node</Label>
+                <Label htmlFor="name">Full Name</Label>
                 <Input id="name" value={editFormData.name} onChange={e => setEditFormData({...editFormData, name: e.target.value})} required className="bg-background shadow-sm font-semibold" />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="email">Authentication Drop (Tracking Metadata)</Label>
+                <Label htmlFor="email">Email Address</Label>
                 <Input id="email" type="email" value={editFormData.email} onChange={e => setEditFormData({...editFormData, email: e.target.value})} required className="bg-background shadow-sm font-medium" />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="department">Native Technical Scope</Label>
-                <Input id="department" value={editFormData.department} onChange={e => setEditFormData({...editFormData, department: e.target.value})} className="bg-background shadow-sm font-medium" />
+                <Label htmlFor="job_title">Job Title / Department</Label>
+                <Input id="job_title" value={editFormData.job_title} onChange={e => setEditFormData({...editFormData, job_title: e.target.value})} className="bg-background shadow-sm font-medium" />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="role">Global Administrator Override</Label>
+                <Label htmlFor="role">Role</Label>
                 <select 
                   id="role"
                   className="flex h-10 w-full rounded-md border border-input bg-background font-bold px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
@@ -292,15 +303,15 @@ export default function StaffPage() {
                   onChange={e => setEditFormData({...editFormData, role: e.target.value})}
                   required
                 >
-                  <option value="staff" className="bg-background font-bold">Standard Bound Pipeline (Staff)</option>
-                  <option value="admin" className="bg-background font-bold">Global Route Mutator (Admin)</option>
+                  <option value="staff" className="bg-background font-bold">Staff</option>
+                  <option value="admin" className="bg-background font-bold">Admin</option>
                 </select>
               </div>
             </div>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setEditStaff(null)} disabled={editing}>Halt Injection</Button>
+              <Button type="button" variant="outline" onClick={() => setEditStaff(null)} disabled={editing}>Cancel</Button>
               <Button type="submit" disabled={editing} className="font-bold">
-                {editing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />} Compile Execution
+                {editing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />} Save Changes
               </Button>
             </DialogFooter>
           </form>

@@ -61,7 +61,7 @@ export default function ProjectDetailsPage() {
     let mounted = true
     if (user?.id) fetchProject()
     return () => { mounted = false }
-  }, [user, supabase, projectId])
+  }, [user?.id, projectId])
 
   const getStatusIcon = (status: string) => {
     switch(status) {
@@ -99,7 +99,7 @@ export default function ProjectDetailsPage() {
 
   const submitCompletion = async () => {
     setSubmitting(true)
-    const uploadedFilesData = []
+    const uploadedFilesData: {id: string, name: string, url: string, type: string, uploadedAt: string}[] = []
 
     for (const file of completionFiles) {
       const fileName = `${Date.now()}_${file.name.replace(/\s+/g, '_')}`
@@ -112,22 +112,33 @@ export default function ProjectDetailsPage() {
 
     const compiledLinks = completionLinks.split('\n').map(l => l.trim()).filter(Boolean)
     const currentFiles = project.deliverables_files || []
-    
-    const completionPayload = {
-      status: 'completed',
-      client_feedback: null, // Clear out any previous rejection
-      deliverables_summary: completionNotes,
-      deliverables_links: compiledLinks,
-      deliverables_files: [...currentFiles, ...uploadedFilesData]
-    }
+    const allDeliverableFiles = [...currentFiles, ...uploadedFilesData]
 
-    const { error } = await supabase.from('projects').update(completionPayload).eq('id', project.id)
+    const res = await fetch('/api/projects/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        projectId: project.id,
+        deliverables_summary: completionNotes,
+        deliverables_links: compiledLinks,
+        deliverables_files: allDeliverableFiles,
+      }),
+    })
 
-    if (error) {
-      toast.error("Failed to commit completion")
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      toast.error(err.error ?? 'Failed to commit completion')
     } else {
-      toast.success("Delivery manifest updated!")
-      setProject({ ...project, ...completionPayload })
+      toast.success('Delivery manifest updated!')
+      setProject({
+        ...project,
+        status: 'completed',
+        client_feedback: null,
+        deliverables_summary: completionNotes,
+        deliverables_links: compiledLinks,
+        deliverables_files: allDeliverableFiles,
+      })
     }
 
     setSubmitting(false)
@@ -312,7 +323,7 @@ export default function ProjectDetailsPage() {
             </CardHeader>
             <CardContent className="pt-4">
               <div className="space-y-3">
-                {project.files && project.files.length > 0 ? project.files.map((file: any, i: number) => (
+                {Array.isArray(project.files) && project.files.length > 0 ? project.files.map((file: any, i: number) => (
                   <div key={i} className="group flex items-start justify-between border bg-card p-3 rounded-lg hover:border-primary/50 hover:shadow-md transition-all shadow-sm">
                     <div className="flex items-start gap-3 overflow-hidden">
                       <div className="p-2 bg-primary/10 rounded-md text-primary shrink-0 mt-0.5">
@@ -397,7 +408,7 @@ export default function ProjectDetailsPage() {
               </div>
             )}
 
-            {project.deliverables_files && project.deliverables_files.length > 0 && (
+            {Array.isArray(project.deliverables_files) && project.deliverables_files.length > 0 && (
               <div className="space-y-3">
                  <h4 className="text-sm font-bold text-muted-foreground uppercase tracking-wider block mb-4">Secure Vault Files</h4>
                  <div className="flex gap-4 overflow-x-auto pb-4 pt-1 snap-x scrollbar-thin scrollbar-thumb-muted-foreground/20">

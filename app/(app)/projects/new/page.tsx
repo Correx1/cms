@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client"
 
 import { useAuth } from "@/lib/auth-context"
@@ -37,18 +38,23 @@ export default function NewProjectPage() {
   useEffect(() => {
     let mounted = true
     async function fetchFormOptions() {
-      const { data: clientsData } = await supabase.from('profiles').select('id, name, company').eq('role', 'client')
-      const { data: staffData } = await supabase.from('profiles').select('id, name, role').in('role', ['admin', 'staff'])
+      const [cliRes, staffRes] = await Promise.all([
+        fetch('/api/admin/profiles?role=client', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/admin/profiles?roles=admin,staff', { credentials: 'include', cache: 'no-store' })
+      ])
+      
+      const cliData = cliRes.ok ? await cliRes.json() : { profiles: [] }
+      const staffData = staffRes.ok ? await staffRes.json() : { profiles: [] }
       
       if (mounted) {
-        setClients(clientsData || [])
-        setStaffPool(staffData || [])
+        setClients(cliData.profiles || [])
+        setStaffPool(staffData.profiles || [])
         setLoadingInitial(false)
       }
     }
     fetchFormOptions()
     return () => { mounted = false }
-  }, [supabase])
+  }, [])
 
   const handleStaffToggle = (staffId: string) => {
     setSelectedStaffIds(prev => 
@@ -59,7 +65,7 @@ export default function NewProjectPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!clientId) {
-      toast.error("You must associate a corporate client.")
+      toast.error("Please select a client.")
       return
     }
 
@@ -83,7 +89,7 @@ export default function NewProjectPage() {
       .single()
 
     if (insertError || !insertedProject) {
-      toast.error("Database rejection executing root project row")
+      toast.error("Failed to create project. Please try again.")
       setSubmitting(false)
       return
     }
@@ -115,16 +121,16 @@ export default function NewProjectPage() {
       await supabase.from('project_assignments').insert(bridgeInserts)
     }
 
-    toast.success("Database execution perfect. Scope deployed.")
+    toast.success("Project created successfully!")
     router.push("/projects")
   }
 
   if (user?.role === "client") {
     return (
       <div className="flex flex-col items-center justify-center h-[50vh] text-center">
-        <h2 className="text-2xl font-bold">Unauthorized Origin Request</h2>
-        <p className="text-muted-foreground mt-2">Aggressively blocked user mapping outside logical boundaries.</p>
-        <Button className="mt-6 shadow-sm" onClick={() => router.back()}>Revert Request</Button>
+        <h2 className="text-2xl font-bold">Access Restricted</h2>
+        <p className="text-muted-foreground mt-2">Only admins and staff can create projects.</p>
+        <Button className="mt-6 shadow-sm" onClick={() => router.back()}>Go Back</Button>
       </div>
     )
   }
@@ -146,8 +152,8 @@ export default function NewProjectPage() {
           </Link>
         </Button>
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Generate Live Project Database Block</h1>
-          <p className="text-sm md:text-base text-muted-foreground mt-1">Configure structural nodes executing SQL insertions dynamically inherently mapping staff bridges accurately.</p>
+          <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Create New Project</h1>
+          <p className="text-sm md:text-base text-muted-foreground mt-1">Fill in the project details, assign a client, and add your team.</p>
         </div>
       </div>
 
@@ -155,8 +161,8 @@ export default function NewProjectPage() {
         <div className="lg:col-span-2 space-y-6">
           <Card className="shadow-sm border-border/50">
             <CardHeader className="bg-muted/20 border-b border-border/50 pb-4">
-              <CardTitle className="text-lg">Project Vector Mapping</CardTitle>
-              <CardDescription>Primary structural strings tracking logic globally.</CardDescription>
+              <CardTitle className="text-lg">Project Details</CardTitle>
+              <CardDescription>Enter the core information for this project.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6 pt-6">
               <div className="space-y-2.5">
@@ -165,7 +171,7 @@ export default function NewProjectPage() {
                   id="title" 
                   value={title}
                   onChange={e => setTitle(e.target.value)}
-                  placeholder="e.g. Acme Backend Pipeline Re-wire" 
+                  placeholder="e.g. Website Redesign for Acme Corp" 
                   required 
                   className="h-11 bg-background text-base shadow-sm focus-visible:ring-1" 
                 />
@@ -180,21 +186,21 @@ export default function NewProjectPage() {
                   value={details}
                   onChange={e => setDetails(e.target.value)}
                   className="flex min-h-[140px] w-full rounded-md border border-input bg-background px-3 py-3 text-sm focus-visible:outline-none focus-visible:ring-1 shadow-sm"
-                  placeholder="Execute logic safely extracting dependencies..."
+                  placeholder="Describe what this project involves..."
                   required
                 />
               </div>
 
               <div className="space-y-2.5 border-t border-border/50 pt-6 mt-2">
                 <Label htmlFor="deliverables" className="text-sm font-semibold flex items-center gap-2">
-                  <FileText className="h-4 w-4 text-muted-foreground" /> Explicit Deliverables String
+                   <FileText className="h-4 w-4 text-muted-foreground" /> Deliverables
                 </Label>
                 <textarea 
                   id="deliverables" 
                   value={deliverables}
                   onChange={e => setDeliverables(e.target.value)}
                   className="flex min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-3 text-sm focus-visible:outline-none focus-visible:ring-1 shadow-sm font-mono"
-                  placeholder="- SQL Triggers mapped natively&#10;- Client Interfaces bound effectively"
+                  placeholder="- Landing page design&#10;- 3 revision rounds&#10;- Final source files"
                   required
                 />
               </div>
@@ -203,8 +209,8 @@ export default function NewProjectPage() {
 
           <Card className="shadow-sm border-border/50 overflow-hidden">
             <CardHeader className="bg-primary/5 border-b border-primary/10 pb-4">
-              <CardTitle className="text-lg text-primary">Initial Vault Uploads</CardTitle>
-              <CardDescription className="text-primary/70">Strict structural binding dropping attachments to Supabase Storage explicitly.</CardDescription>
+              <CardTitle className="text-lg text-primary">Project Files</CardTitle>
+              <CardDescription className="text-primary/70">Attach any reference files or briefs for this project.</CardDescription>
             </CardHeader>
             <CardContent className="pt-6">
               <div className="border-2 border-dashed border-border/60 rounded-xl p-8 text-center bg-background/50 hover:bg-muted/50 transition-colors">
@@ -216,15 +222,15 @@ export default function NewProjectPage() {
                   onChange={(e) => setSelectedFiles(Array.from(e.target.files || []))}
                 />
                 <Button variant="secondary" type="button" onClick={() => document.getElementById('files')?.click()} className="mb-2 shadow-sm border">
-                  Trigger Picker
+                  Select Files
                 </Button>
-                <p className="text-sm text-muted-foreground mt-2">Push drop hooks rendering array buffers</p>
+                <p className="text-sm text-muted-foreground mt-2">or drag & drop files here</p>
               </div>
 
               {selectedFiles.length > 0 && (
                 <div className="mt-4 space-y-2 border-t border-border/50 pt-4">
                   <span className="text-xs uppercase font-bold text-muted-foreground tracking-wider">
-                    Execution Staging Payload ({selectedFiles.length})
+                    Files ready to upload ({selectedFiles.length})
                   </span>
                   {selectedFiles.map((file, i) => (
                     <div key={i} className="flex items-center gap-3 p-3 border border-border/50 rounded-lg bg-background shadow-sm">
@@ -244,17 +250,17 @@ export default function NewProjectPage() {
         <div className="space-y-6">
           <Card className="shadow-sm border-border/50">
             <CardHeader className="bg-muted/20 border-b border-border/50 pb-4">
-              <CardTitle className="text-lg">Database Parameters</CardTitle>
+              <CardTitle className="text-lg">Project Settings</CardTitle>
             </CardHeader>
             <CardContent className="space-y-6 pt-6">
               
               <div className="space-y-2.5">
                 <Label htmlFor="client" className="text-sm font-semibold flex items-center gap-2">
-                  <Building2 className="h-4 w-4 text-muted-foreground" /> Foreign-Key Client Binding
+                   <Building2 className="h-4 w-4 text-muted-foreground" /> Client
                 </Label>
                 <Select required value={clientId} onValueChange={(val) => setClientId(val || "")}>
                   <SelectTrigger className="min-h-[44px] h-auto py-2 bg-background transition-colors focus:ring-1 shadow-sm [&>span]:whitespace-normal [&>span]:text-left [&>span]:break-words">
-                    {clientId ? clients.find(c => c.id === clientId)?.company : <span className="text-muted-foreground flex items-center gap-1.5"><Building2 className="h-3.5 w-3.5" /> Hook literal client instance...</span>}
+                    {clientId ? clients.find(c => c.id === clientId)?.company : <span className="text-muted-foreground flex items-center gap-1.5"><Building2 className="h-3.5 w-3.5" /> Select a client...</span>}
                   </SelectTrigger>
                   <SelectContent className="max-h-[300px]">
                     {clients.map(c => (
@@ -268,10 +274,10 @@ export default function NewProjectPage() {
 
               <div className="space-y-2.5">
                 <Label className="text-sm font-semibold flex items-center gap-2">
-                  <User className="h-4 w-4 text-muted-foreground" /> Explicit Node Bridges (Staff)
+                   <User className="h-4 w-4 text-muted-foreground" /> Assign Staff
                 </Label>
                 <div className="space-y-2 p-3 border border-border/50 rounded-md bg-background shadow-sm max-h-[220px] overflow-y-auto">
-                  {staffPool.length === 0 && <p className="text-center text-xs text-muted-foreground py-4">No staff objects extracted natively.</p>}
+                  {staffPool.length === 0 && <p className="text-center text-xs text-muted-foreground py-4">No staff members available.</p>}
                   {staffPool.map(s => (
                     <div key={s.id} className="flex items-start space-x-3 bg-muted/20 p-2.5 rounded-md hover:bg-muted/50 transition-colors border border-transparent hover:border-border/50 group cursor-pointer" onClick={() => handleStaffToggle(s.id)}>
                       <input 
@@ -286,9 +292,9 @@ export default function NewProjectPage() {
                         </div>
                         <div className="flex flex-col gap-1">
                           <span className="text-sm font-bold leading-none">{s.name}</span>
-                          <span className="text-muted-foreground text-xs leading-none font-medium capitalize">
-                            {s.role} Instance
-                          </span>
+                           <span className="text-muted-foreground text-xs leading-none font-medium capitalize">
+                             {s.role}
+                           </span>
                         </div>
                       </Label>
                     </div>
@@ -300,22 +306,22 @@ export default function NewProjectPage() {
 
               <div className="space-y-2.5">
                 <Label htmlFor="status" className="text-sm font-semibold flex items-center gap-2">
-                  <Activity className="h-4 w-4 text-muted-foreground" /> State Property
+                   <Activity className="h-4 w-4 text-muted-foreground" /> Initial Status
                 </Label>
                 <Select value={status} onValueChange={(val) => setStatus(val || "pending")} required>
                   <SelectTrigger className="h-11 bg-background transition-colors focus:ring-1 shadow-sm font-semibold">
                     <span className="capitalize">{status}</span>
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="pending" className="cursor-pointer py-2 font-medium">Pending Scope</SelectItem>
-                    <SelectItem value="active" className="cursor-pointer py-2 font-medium">Active Development</SelectItem>
+                    <SelectItem value="pending" className="cursor-pointer py-2 font-medium">Pending</SelectItem>
+                    <SelectItem value="active" className="cursor-pointer py-2 font-medium">Active</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
               <div className="space-y-2.5">
                 <Label htmlFor="deadline" className="text-sm font-semibold flex items-center gap-2">
-                  <Calendar className="h-4 w-4 text-muted-foreground" /> Target Deadline Execution (Optional)
+                   <Calendar className="h-4 w-4 text-muted-foreground" /> Deadline (optional)
                 </Label>
                 <Input 
                   id="deadline" 
@@ -328,7 +334,7 @@ export default function NewProjectPage() {
 
               <div className="space-y-2.5">
                 <Label htmlFor="price" className="text-sm font-semibold flex items-center gap-2">
-                  <DollarSign className="h-4 w-4 text-emerald-600 dark:text-emerald-500" /> Database Price String
+                   <DollarSign className="h-4 w-4 text-emerald-600 dark:text-emerald-500" /> Project Value
                 </Label>
                 <div className="relative">
                   <span className="absolute left-3.5 top-3 text-muted-foreground/70 font-semibold">$</span>
@@ -346,10 +352,10 @@ export default function NewProjectPage() {
             </CardContent>
             <CardFooter className="bg-muted/10 border-t border-border/50 p-4 rounded-b-xl flex flex-col sm:flex-row gap-3">
               <Button type="submit" size="lg" className="w-full sm:flex-1 shadow-md font-bold" disabled={submitting}>
-                {submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <><Save className="mr-2 h-4 w-4" /> Execute Inserts</>}
+                {submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <><Save className="mr-2 h-4 w-4" /> Create Project</>}
               </Button>
               <Button variant="outline" size="lg" type="button" asChild className="w-full sm:w-auto bg-background" disabled={submitting}>
-                <Link href="/projects">Halt Drop</Link>
+                <Link href="/projects">Cancel</Link>
               </Button>
             </CardFooter>
           </Card>

@@ -22,20 +22,27 @@ export default function ClientDashboard() {
     let mounted = true
     async function fetchClientProjects() {
       if (!user) return
-      const { data } = await supabase
-        .from('projects')
-        .select('*')
-        .eq('client_id', user.id)
-        .order('created_at', { ascending: false })
+      try {
+        const { data, error } = await supabase
+          .from('projects')
+          .select('*')
+          .eq('client_id', user.id)
+          .order('created_at', { ascending: false })
 
-      if (mounted && data) {
-        setClientProjects(data)
-        setLoading(false)
+        if (error) throw error
+
+        if (mounted && data) {
+          setClientProjects(data)
+        }
+      } catch (err) {
+        console.error("Client dashboard fetch error:", err)
+      } finally {
+        if (mounted) setLoading(false)
       }
     }
     fetchClientProjects()
     return () => { mounted = false }
-  }, [user, supabase])
+  }, [user?.id, supabase])
   
   // All files securely pulled natively tracing JSON Arrays
   const allFiles = clientProjects.flatMap(p => {

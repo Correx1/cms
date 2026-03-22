@@ -14,7 +14,6 @@ export default function ClientProfilePage() {
   const params = useParams()
   const router = useRouter()
   const clientId = params?.id as string
-  const supabase = createClient()
   
   const [loading, setLoading] = useState(true)
   const [clientProfile, setClientProfile] = useState<any>(null)
@@ -22,24 +21,28 @@ export default function ClientProfilePage() {
   useEffect(() => {
     let mounted = true
     const fetchClientData = async () => {
-      const { data } = await supabase
-        .from('profiles')
-        .select(`
-          *,
-          projects (*)
-        `)
-        .eq('id', clientId)
-        .single()
+      try {
+        const res = await fetch(`/api/admin/profiles/${clientId}`, {
+          credentials: 'include',
+          cache: 'no-store'
+        })
         
-      if (mounted && data) {
-        setClientProfile(data)
+        if (res.ok) {
+          const json = await res.json()
+          if (mounted && json.profile) {
+            setClientProfile(json.profile)
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch client details:", err)
+      } finally {
+        if (mounted) setLoading(false)
       }
-      setLoading(false)
     }
 
     fetchClientData()
     return () => { mounted = false }
-  }, [supabase, clientId])
+  }, [clientId])
 
   if (loading) {
     return (
@@ -83,7 +86,7 @@ export default function ClientProfilePage() {
           </Button>
           <div>
             <h1 className="text-3xl font-bold tracking-tight">{clientProfile.name || "Unknown Identity"}</h1>
-            <p className="text-muted-foreground mt-1 text-sm font-semibold">Physical Identity Block / CRM Mapping Node</p>
+            <p className="text-muted-foreground mt-1 text-sm font-semibold">Client Profile</p>
           </div>
         </div>
       </div>
@@ -98,7 +101,7 @@ export default function ClientProfilePage() {
               <div>
                 <CardTitle className="font-bold">{clientProfile.company || "Unmapped Corporation"}</CardTitle>
                 <CardDescription className="uppercase text-[10px] tracking-widest mt-1 font-bold text-primary/70">
-                  Global Physical Client
+                  Client
                 </CardDescription>
               </div>
             </div>
@@ -111,7 +114,7 @@ export default function ClientProfilePage() {
               </div>
               <div className="flex items-center gap-3 text-sm font-semibold">
                 <Phone className="h-4 w-4 text-muted-foreground" />
-                <span>{clientProfile.phone || "No signal established"}</span>
+                <span>{clientProfile.phone || "No phone number provided"}</span>
               </div>
               <div className="flex items-center gap-3 text-sm font-semibold">
                 <Building2 className="h-4 w-4 text-muted-foreground" />
@@ -121,8 +124,8 @@ export default function ClientProfilePage() {
             
             <div className="pt-4 border-t border-border/50">
               <div className="bg-muted/10 p-4 rounded-xl border border-border/50 shadow-sm">
-                <div className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest mb-1">Total Delivery Output</div>
-                <div className="text-2xl font-bold">${totalValue.toLocaleString()} <span className="text-[10px] uppercase font-bold text-emerald-500/70 ml-1">Closed Pipeline</span></div>
+                <div className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest mb-1">Total Value Delivered</div>
+                <div className="text-2xl font-bold">${totalValue.toLocaleString()} <span className="text-[10px] uppercase font-bold text-emerald-500/70 ml-1">from completed projects</span></div>
               </div>
             </div>
           </CardContent>
@@ -131,12 +134,12 @@ export default function ClientProfilePage() {
         <Card className="md:col-span-2 shadow-sm border-border/50">
           <CardHeader className="flex flex-row items-baseline justify-between bg-muted/5 border-b border-border/50 pb-4">
             <div>
-              <CardTitle className="flex items-center gap-2">Linked Routing Nodes</CardTitle>
-              <CardDescription className="font-medium mt-1">Physical project entities mapping to this Client ID.</CardDescription>
+              <CardTitle className="flex items-center gap-2">Projects</CardTitle>
+              <CardDescription className="font-medium mt-1">All projects linked to this client.</CardDescription>
             </div>
             <Button size="sm" asChild className="shadow-sm font-bold">
               <Link href={`/projects/new?client=${clientProfile.id}`}>
-                Attach Pipeline
+                New Project
               </Link>
             </Button>
           </CardHeader>
@@ -145,10 +148,10 @@ export default function ClientProfilePage() {
               <Table>
                 <TableHeader>
                   <TableRow className="border-border/50 hover:bg-transparent">
-                    <TableHead className="font-bold text-xs uppercase tracking-wider text-muted-foreground py-3">Vector String</TableHead>
-                    <TableHead className="font-bold text-xs uppercase tracking-wider text-muted-foreground py-3">Pipeline Match</TableHead>
-                    <TableHead className="font-bold text-xs uppercase tracking-wider text-muted-foreground py-3">Block Timeline</TableHead>
-                    <TableHead className="font-bold text-xs uppercase tracking-wider text-muted-foreground py-3 text-right">Physical Link</TableHead>
+                    <TableHead className="font-bold text-xs uppercase tracking-wider text-muted-foreground py-3">Project</TableHead>
+                    <TableHead className="font-bold text-xs uppercase tracking-wider text-muted-foreground py-3">Status</TableHead>
+                    <TableHead className="font-bold text-xs uppercase tracking-wider text-muted-foreground py-3">Deadline</TableHead>
+                    <TableHead className="font-bold text-xs uppercase tracking-wider text-muted-foreground py-3 text-right"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -169,7 +172,7 @@ export default function ClientProfilePage() {
                       </TableCell>
                       <TableCell className="text-right py-4">
                         <Button variant="outline" size="sm" asChild className="opacity-0 group-hover:opacity-100 transition-opacity font-semibold">
-                          <Link href={`/projects/${project.id}`}>Inspect Document</Link>
+                          <Link href={`/projects/${project.id}`}>View</Link>
                         </Button>
                       </TableCell>
                     </TableRow>
@@ -179,10 +182,10 @@ export default function ClientProfilePage() {
             ) : (
               <div className="text-center py-12 border border-dashed rounded-lg border-border/50 mt-2 bg-muted/5">
                 <FolderKanban className="mx-auto h-8 w-8 text-muted-foreground opacity-30 mb-3" />
-                <h3 className="text-lg font-bold">Null Entity Output</h3>
-                <p className="text-sm font-medium text-muted-foreground mt-1 mb-4">No mapped references detected inside DB queries globally.</p>
+                <h3 className="text-lg font-bold">No Projects Yet</h3>
+                <p className="text-sm font-medium text-muted-foreground mt-1 mb-4">No projects have been created for this client yet.</p>
                 <Button asChild className="shadow-sm font-semibold">
-                  <Link href={`/projects/new?client=${clientProfile.id}`}>Bind Initial Project Object</Link>
+                  <Link href={`/projects/new?client=${clientProfile.id}`}>Create First Project</Link>
                 </Button>
               </div>
             )}

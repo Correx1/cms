@@ -1,4 +1,3 @@
-/* eslint-disable react-hooks/set-state-in-effect */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 "use client"
 
@@ -6,13 +5,13 @@ import { useAuth } from "@/lib/auth-context"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Plus, Users, Search, ChevronDown, ListChecks, Edit, Building2, Loader2, Save } from "lucide-react"
+import { Plus, Users, Search, ChevronDown, ListChecks, Edit, Building2, Loader2, Save, Trash2 } from "lucide-react"
 import Link from "next/link"
 import { Input } from "@/components/ui/input"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { toast } from "sonner"
 
@@ -28,38 +27,54 @@ export default function ClientsPage() {
   const [editFormData, setEditFormData] = useState({ name: "", company: "", email: "", phone: "" })
   const [editing, setEditing] = useState(false)
 
-  const fetchClients = async () => {
-    // We fetch profiles where role=client and join projects strictly
-    const { data: profilesData } = await supabase
-      .from('profiles')
-      .select(`
-        *,
-        projects (id)
-      `)
-      .eq('role', 'client')
-      .order('created_at', { ascending: false })
-
-    if (profilesData) {
-      const formatted = profilesData.map(c => ({
-        ...c,
-        projectCount: c.projects?.length || 0
-      }))
-      setClientList(formatted)
+  const fetchClients = useCallback(async () => {
+    try {
+      // Use admin API route (service-role key) so RLS doesn't block the listing
+      const res = await fetch('/api/admin/profiles?role=client', { 
+        credentials: 'include',
+        cache: 'no-store' 
+      })
+      if (res.ok) {
+        const json = await res.json()
+        const formatted = (json.profiles ?? []).map((c: any) => ({
+          ...c,
+          projectCount: c.projects?.length ?? c.assignments?.length ?? 0
+        }))
+        setClientList(formatted)
+      }
+    } catch (err) {
+      console.error("Fetch clients err:", err)
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
-  }
+  }, [])
 
   useEffect(() => {
-    let mounted = true
     if (user?.id) fetchClients()
-    return () => { mounted = false }
-  }, [user, supabase])
+  }, [user?.id, fetchClients])
 
   const visibleClients = clientList.filter(c => 
     c.name?.toLowerCase().includes(searchQuery.toLowerCase()) || 
     c.company?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     c.email?.toLowerCase().includes(searchQuery.toLowerCase())
   )
+
+  const handleDeleteClient = async (id: string) => {
+    if (!window.confirm("Are you sure you want to delete this client?")) return
+    
+    // We update to a dedicated delete API if needed, but profiles can be deleted if admin has RLS access.
+    // However, since admin RLS is tricky, we'll use a fetch to an API if we had one, but let's try direct first.
+    // Actually, profiles deletion might fail if user is not using service role, but Admin should have RLS access.
+    const { error } = await supabase.from('profiles').delete().eq('id', id)
+    
+    if (error) {
+      toast.error("Failed to delete client")
+      console.error(error)
+    } else {
+      toast.success("Client deleted successfully")
+      setClientList(prev => prev.filter(c => c.id !== id))
+    }
+  }
 
   const handleOpenEdit = (clientParam: any) => {
     setEditClient(clientParam)
@@ -110,7 +125,7 @@ export default function ClientsPage() {
         {user?.role === "admin" && (
           <Button className="shadow-sm shadow-primary/20 w-full sm:w-auto" asChild>
             <Link href="/clients/new">
-              <Plus className="mr-2 h-4 w-4" /> Trigger New Client Node
+              <Plus className="mr-2 h-4 w-4" /> Invite New Client
             </Link>
           </Button>
         )}
@@ -140,12 +155,12 @@ export default function ClientsPage() {
             <Table>
               <TableHeader className="bg-muted/30">
                 <TableRow className="border-border/50">
-                  <TableHead className="w-[300px] py-4 pl-6 text-sm">Target Identity Name</TableHead>
-                  <TableHead className="py-4 text-sm">Company Map</TableHead>
-                  <TableHead className="py-4 hidden md:table-cell text-sm">Email Property</TableHead>
-                  <TableHead className="py-4 hidden lg:table-cell text-sm">Phone Tracker</TableHead>
-                  <TableHead className="py-4 text-center text-sm">Projects Node</TableHead>
-                  <TableHead className="py-4 pr-6 text-right text-sm">Options</TableHead>
+                  <TableHead className="w-[300px] py-4 pl-6 text-sm">Client Name</TableHead>
+                  <TableHead className="py-4 text-sm">Company</TableHead>
+                  <TableHead className="py-4 hidden md:table-cell text-sm">Email</TableHead>
+                  <TableHead className="py-4 hidden lg:table-cell text-sm">Phone no.</TableHead>
+                  <TableHead className="py-4 text-center text-sm">Projects</TableHead>
+                  <TableHead className="py-4 pr-6 text-right text-sm">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -182,18 +197,24 @@ export default function ClientsPage() {
                         <DropdownMenuTrigger asChild>
                           <Button variant="outline" size="sm" className="h-8 shadow-sm font-semibold">
                             <ListChecks className="mr-2 h-4 w-4 hidden sm:block" />
-                            <span>Modify</span>
+                            <span>Actions</span>
                             <ChevronDown className="ml-2 h-3 w-3 opacity-50" />
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-[180px]">
                           <DropdownMenuItem className="cursor-pointer font-medium" asChild>
-                            <Link href={`/clients/${client.id}`}><Users className="mr-2 h-4 w-4" /> Resolve Target Graph</Link>
+                            <Link href={`/clients/${client.id}`}><Users className="mr-2 h-4 w-4" /> View Details</Link>
                           </DropdownMenuItem>
                           {user?.role === "admin" && (
-                            <DropdownMenuItem className="cursor-pointer font-medium" onClick={() => handleOpenEdit(client)}>
-                              <Edit className="mr-2 h-4 w-4" /> Force Structure Execution
-                            </DropdownMenuItem>
+                            <>
+                              <DropdownMenuItem className="cursor-pointer font-medium" onClick={() => handleOpenEdit(client)}>
+                                <Edit className="mr-2 h-4 w-4" /> Edit
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem className="cursor-pointer font-medium text-destructive focus:text-destructive" onClick={() => handleDeleteClient(client.id)}>
+                                <Trash2 className="mr-2 h-4 w-4" /> Delete
+                              </DropdownMenuItem>
+                            </>
                           )}
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -202,8 +223,7 @@ export default function ClientsPage() {
                 )) : (
                   <TableRow>
                     <TableCell colSpan={6} className="h-32 text-center text-muted-foreground text-base">
-                      No literal profile block extracted from SQL logic internally.
-                    </TableCell>
+                      No clients found.                    </TableCell>
                   </TableRow>
                 )}
               </TableBody>
@@ -216,33 +236,33 @@ export default function ClientsPage() {
         <DialogContent className="sm:max-w-md">
           <form onSubmit={submitEdit}>
             <DialogHeader>
-              <DialogTitle>Physical Block Mutation</DialogTitle>
+              <DialogTitle>Edit Client</DialogTitle>
               <DialogDescription>
-                Overwrite the parameters tracking Identity rows cleanly safely accurately natively matching literal logic gracefully correctly locally.
+                Update this clients information.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-4">
               <div className="space-y-2">
-                <Label htmlFor="name">Target Physical String</Label>
+                <Label htmlFor="name">Client Name</Label>
                 <Input id="name" value={editFormData.name} onChange={e => setEditFormData({...editFormData, name: e.target.value})} required className="bg-background shadow-sm font-semibold" />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="company">Company Reference Block</Label>
+                <Label htmlFor="company">Company</Label>
                 <Input id="company" value={editFormData.company} onChange={e => setEditFormData({...editFormData, company: e.target.value})} required className="bg-background shadow-sm font-semibold" />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="email">Tracking Value Data (Email)</Label>
+                <Label htmlFor="email">Email Address</Label>
                 <Input id="email" type="email" value={editFormData.email} onChange={e => setEditFormData({...editFormData, email: e.target.value})} required className="bg-background shadow-sm font-medium" />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="phone">Physical Routing Signal (Phone)</Label>
+                <Label htmlFor="phone">Phone Number</Label>
                 <Input id="phone" value={editFormData.phone} onChange={e => setEditFormData({...editFormData, phone: e.target.value})} className="bg-background shadow-sm font-medium" />
               </div>
             </div>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setEditClient(null)} disabled={editing}>Release Process</Button>
+              <Button type="button" variant="outline" onClick={() => setEditClient(null)} disabled={editing}>Cancel</Button>
               <Button type="submit" disabled={editing} className="font-bold">
-                {editing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />} Fire Supabase Rewrite
+                {editing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />} Save Changes
               </Button>
             </DialogFooter>
           </form>

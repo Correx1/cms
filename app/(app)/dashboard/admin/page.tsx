@@ -8,11 +8,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Plus, Users, FolderKanban, CheckCircle2, Clock, Calendar, Activity, ExternalLink, Loader2 } from "lucide-react"
 import Link from "next/link"
 import { useEffect, useState } from "react"
-import { createClient } from "@/lib/supabase/client"
 
 export default function AdminDashboard() {
-  const supabase = createClient()
-  
+
   const [loading, setLoading] = useState(true)
   const [totalProjects, setTotalProjects] = useState(0)
   const [activeProjects, setActiveProjects] = useState(0)
@@ -23,35 +21,35 @@ export default function AdminDashboard() {
   useEffect(() => {
     let mounted = true
     async function fetchData() {
-      // Execute robust native counts across tables heavily bypassing massive GET requests safely
-      const { count: clientsCount } = await supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('role', 'client')
-      const { count: projCount } = await supabase.from('projects').select('*', { count: 'exact', head: true })
-      const { count: actCount } = await supabase.from('projects').select('*', { count: 'exact', head: true }).eq('status', 'active')
-      const { count: compCount } = await supabase.from('projects').select('*', { count: 'exact', head: true }).in('status', ['completed', 'approved'])
+      try {
+        // Use service-role API routes so admin sees all data regardless of DB role setting
+        const [profilesRes, projectsRes] = await Promise.all([
+          fetch('/api/admin/profiles?role=client', { credentials: 'include', cache: 'no-store' }),
+          fetch('/api/admin/projects?limit=10', { credentials: 'include', cache: 'no-store' }),
+        ])
 
-      // Extract precise table joins linking Relational IDs explicitly mapping Staff and Clients
-      const { data: upcoming } = await supabase
-        .from('projects')
-        .select(`
-          id, title, status, deadline,
-          client:profiles!projects_client_id_fkey(name),
-          project_assignments(profiles(name))
-        `)
-        .order('deadline', { ascending: true })
-        .limit(10)
+        const profilesJson = profilesRes.ok ? await profilesRes.json() : { profiles: [] }
+        const projectsJson = projectsRes.ok ? await projectsRes.json() : { projects: [] }
 
-      if (mounted) {
-        setTotalClients(clientsCount || 0)
-        setTotalProjects(projCount || 0)
-        setActiveProjects(actCount || 0)
-        setCompletedProjects(compCount || 0)
-        if (upcoming) setSortedProjects(upcoming)
-        setLoading(false)
+        const allProjects: any[] = projectsJson.projects ?? []
+        const clients: any[] = profilesJson.profiles ?? []
+
+        if (mounted) {
+          setTotalClients(clients.length)
+          setTotalProjects(allProjects.length)
+          setActiveProjects(allProjects.filter(p => p.status === 'active').length)
+          setCompletedProjects(allProjects.filter(p => p.status === 'completed' || p.status === 'approved').length)
+          setSortedProjects(allProjects.slice(0, 10))
+        }
+      } catch (err) {
+        console.error("Dashboard fetch error:", err)
+      } finally {
+        if (mounted) setLoading(false)
       }
     }
     fetchData()
     return () => { mounted = false }
-  }, [supabase])
+  }, [])
 
   const getStatusIcon = (status: string) => {
     switch(status) {

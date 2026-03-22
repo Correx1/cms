@@ -1,3 +1,5 @@
+/* eslint-disable react-hooks/set-state-in-effect */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client"
 
 import { useAuth } from "@/lib/auth-context"
@@ -40,8 +42,8 @@ export default function EditProjectPage() {
     // Parallel Fetching
     const [prjRes, cliRes, staffRes] = await Promise.all([
       supabase.from('projects').select('*, assignments:project_assignments(user_id)').eq('id', projectId).single(),
-      supabase.from('profiles').select('id, name, company').eq('role', 'client'),
-      supabase.from('profiles').select('id, name, role').in('role', ['admin', 'staff'])
+      fetch('/api/admin/profiles?role=client', { credentials: 'include', cache: 'no-store' }),
+      fetch('/api/admin/profiles?roles=admin,staff', { credentials: 'include', cache: 'no-store' })
     ])
 
     if (prjRes.data) {
@@ -56,8 +58,10 @@ export default function EditProjectPage() {
       setClientId(p.client_id || "")
       setSelectedStaffIds(p.assignments?.map((a: any) => a.user_id) || [])
     }
-    setClients(cliRes.data || [])
-    setStaffPool(staffRes.data || [])
+    const cliData = cliRes.ok ? await cliRes.json() : { profiles: [] }
+    const staffData = staffRes.ok ? await staffRes.json() : { profiles: [] }
+    setClients(cliData.profiles || [])
+    setStaffPool(staffData.profiles || [])
     setLoadingInitial(false)
   }
 
@@ -65,7 +69,7 @@ export default function EditProjectPage() {
     let mounted = true
     if (user?.id) fetchDependencies()
     return () => { mounted = false }
-  }, [user, supabase, projectId])
+  }, [user?.id, projectId])
 
   const handleStaffToggle = (staffId: string) => {
     setSelectedStaffIds(prev => 
@@ -74,24 +78,24 @@ export default function EditProjectPage() {
   }
 
   const deleteProjectFile = async (idxFile: number) => {
-    if (!window.confirm("Remove this exact file array element globally?")) return
+    if (!window.confirm("Remove this file?")) return
     const newFiles = [...(project.files || [])]
     newFiles.splice(idxFile, 1)
     
     setProject({ ...project, files: newFiles })
     const { error } = await supabase.from('projects').update({ files: newFiles }).eq('id', project.id)
     if (error) {
-      toast.error("Deletion rejected")
+      toast.error("Failed to remove file")
       fetchDependencies()
     } else {
-      toast.success("Document pruned securely")
+      toast.success("File removed")
     }
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!clientId) {
-      toast.error("Must explicitly link a native client identity")
+      toast.error("Please select a client.")
       return
     }
 
@@ -126,7 +130,7 @@ export default function EditProjectPage() {
     const { error: updateError } = await supabase.from('projects').update(projectPayload).eq('id', projectId)
 
     if (updateError) {
-      toast.error("Row write locked")
+      toast.error("Failed to update project. Please try again.")
       setSubmitting(false)
       return
     }
@@ -142,16 +146,16 @@ export default function EditProjectPage() {
       await supabase.from('project_assignments').insert(bridgeInserts)
     }
 
-    toast.success("Project structure modified successfully")
+    toast.success("Project updated successfully!")
     router.push(`/projects/${projectId}`)
   }
 
   if (user?.role === "client") {
     return (
       <div className="flex flex-col items-center justify-center h-[50vh] text-center">
-        <h2 className="text-2xl font-bold">Scope Modification Restricted</h2>
-        <p className="text-muted-foreground mt-2">Only Internal Staff instances maintain rewrite permissions locking parameters.</p>
-        <Button className="mt-6 shadow-sm" onClick={() => router.back()}>Revert Execution</Button>
+        <h2 className="text-2xl font-bold">Access Restricted</h2>
+        <p className="text-muted-foreground mt-2">Only admins and staff can edit projects.</p>
+        <Button className="mt-6 shadow-sm" onClick={() => router.back()}>Go Back</Button>
       </div>
     )
   }
@@ -173,8 +177,8 @@ export default function EditProjectPage() {
           </Link>
         </Button>
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Modify Relational Scope</h1>
-          <p className="text-sm md:text-base text-muted-foreground mt-1">Adjust root parameters mapping directly to [{project.title}].</p>
+          <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Edit Project</h1>
+          <p className="text-sm md:text-base text-muted-foreground mt-1">Editing: {project.title}</p>
         </div>
       </div>
 
@@ -182,8 +186,8 @@ export default function EditProjectPage() {
         <div className="lg:col-span-2 space-y-6">
           <Card className="shadow-sm border-border/50">
             <CardHeader className="bg-muted/20 border-b border-border/50 pb-4">
-              <CardTitle className="text-lg">Core Data Vector</CardTitle>
-              <CardDescription>Primary string extraction points overriding database.</CardDescription>
+              <CardTitle className="text-lg">Project Details</CardTitle>
+              <CardDescription>Update the core information for this project.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6 pt-6">
               <div className="space-y-2.5">
@@ -199,7 +203,7 @@ export default function EditProjectPage() {
 
               <div className="space-y-2.5">
                 <Label htmlFor="details" className="text-sm font-semibold flex items-center gap-2">
-                  <Text className="h-4 w-4 text-muted-foreground" /> Overview Strings
+                  <Text className="h-4 w-4 text-muted-foreground" /> Description
                 </Label>
                 <textarea 
                   id="details" 
@@ -212,7 +216,7 @@ export default function EditProjectPage() {
 
               <div className="space-y-2.5 border-t border-border/50 pt-6 mt-2">
                 <Label htmlFor="deliverables" className="text-sm font-semibold flex items-center gap-2">
-                  <FileText className="h-4 w-4 text-muted-foreground" /> Initial Constraint Bindings
+                  <FileText className="h-4 w-4 text-muted-foreground" /> Deliverables
                 </Label>
                 <textarea 
                   id="deliverables" 
@@ -227,14 +231,14 @@ export default function EditProjectPage() {
 
           <Card className="shadow-sm border-border/50 overflow-hidden">
             <CardHeader className="bg-primary/5 border-b border-primary/10 pb-4">
-              <CardTitle className="text-lg text-primary">Attachments Vault Config</CardTitle>
-              <CardDescription className="text-primary/70">JSON mapping directly extracting natively mapped file hooks securely.</CardDescription>
+              <CardTitle className="text-lg text-primary">File Attachments</CardTitle>
+              <CardDescription className="text-primary/70">Manage files attached to this project.</CardDescription>
             </CardHeader>
             <CardContent className="pt-6">
               
               {project.files && project.files.length > 0 && (
                 <div className="mb-6 space-y-3">
-                  <span className="text-xs uppercase font-bold text-muted-foreground tracking-wider">Historical Database Files</span>
+                  <span className="text-xs uppercase font-bold text-muted-foreground tracking-wider">Existing Files</span>
                   {project.files.map((f: any, i: number) => (
                     <div key={i} className="flex items-center justify-between p-3 border border-border/50 rounded-lg bg-background shadow-sm">
                       <div className="flex items-center gap-3">
@@ -258,15 +262,15 @@ export default function EditProjectPage() {
                   onChange={(e) => setSelectedFiles(Array.from(e.target.files || []))}
                 />
                 <Button variant="secondary" type="button" onClick={() => document.getElementById('files')?.click()} className="mb-2 shadow-sm border">
-                  Append New Files to Array
+                  Upload Files
                 </Button>
-                <p className="text-sm text-muted-foreground mt-2">Explicitly execute Vault drops.</p>
+                <p className="text-sm text-muted-foreground mt-2">Click to select files to upload or drag & drop here</p>
               </div>
 
               {selectedFiles.length > 0 && (
                 <div className="mt-4 space-y-2 border-t border-border/50 pt-4">
                   <span className="text-xs uppercase font-bold text-muted-foreground tracking-wider">
-                    Queueing Payload ({selectedFiles.length})
+                    Files to upload ({selectedFiles.length})
                   </span>
                   {selectedFiles.map((file, i) => (
                     <div key={i} className="flex items-center gap-3 p-3 border border-border/50 rounded-lg bg-background shadow-sm">
@@ -286,17 +290,17 @@ export default function EditProjectPage() {
         <div className="space-y-6">
           <Card className="shadow-sm border-border/50">
             <CardHeader className="bg-muted/20 border-b border-border/50 pb-4">
-              <CardTitle className="text-lg">Relational Node Bridges</CardTitle>
+              <CardTitle className="text-lg">Project Settings</CardTitle>
             </CardHeader>
             <CardContent className="space-y-6 pt-6">
               
               <div className="space-y-2.5">
                 <Label htmlFor="client" className="text-sm font-semibold flex items-center gap-2">
-                  <Building2 className="h-4 w-4 text-muted-foreground" /> Foreign ID Mapping
+                  <Building2 className="h-4 w-4 text-muted-foreground" /> Client
                 </Label>
                 <Select required value={clientId} onValueChange={(val) => setClientId(val || "")}>
                   <SelectTrigger className="min-h-[44px] h-auto py-2 bg-background transition-colors focus:ring-1 shadow-sm [&>span]:whitespace-normal [&>span]:text-left [&>span]:break-words">
-                    {clientId ? clients.find(c => c.id === clientId)?.company || clients.find(c => c.id === clientId)?.name : <span className="text-muted-foreground">Attach Client Record...</span>}
+                    {clientId ? clients.find(c => c.id === clientId)?.company || clients.find(c => c.id === clientId)?.name : <span className="text-muted-foreground">Select a client...</span>}
                   </SelectTrigger>
                   <SelectContent className="max-h-[300px]">
                     {clients.map(c => (
@@ -310,7 +314,7 @@ export default function EditProjectPage() {
 
               <div className="space-y-2.5">
                 <Label className="text-sm font-semibold flex items-center gap-2">
-                  <User className="h-4 w-4 text-muted-foreground" /> Associated Staff Handlers
+                  <User className="h-4 w-4 text-muted-foreground" /> Assigned Staff
                 </Label>
                 <div className="space-y-2 p-3 border border-border/50 rounded-md bg-background shadow-sm max-h-[220px] overflow-y-auto">
                   {staffPool.map(s => (
@@ -328,7 +332,7 @@ export default function EditProjectPage() {
                         <div className="flex flex-col gap-1">
                           <span className="text-sm font-bold leading-none">{s.name}</span>
                           <span className="text-muted-foreground text-xs leading-none font-medium capitalize">
-                            {s.role} Instance
+                            {s.role}
                           </span>
                         </div>
                       </Label>
@@ -341,15 +345,15 @@ export default function EditProjectPage() {
 
               <div className="space-y-2.5">
                 <Label htmlFor="status" className="text-sm font-semibold flex items-center gap-2">
-                  <Activity className="h-4 w-4 text-muted-foreground" /> Override Status Vector
+                  <Activity className="h-4 w-4 text-muted-foreground" /> Status
                 </Label>
                 <Select value={status} onValueChange={(val) => setStatus(val || "pending")} required>
                   <SelectTrigger className="h-11 bg-background transition-colors focus:ring-1 shadow-sm font-semibold">
                     <span className="capitalize">{status}</span>
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="pending" className="cursor-pointer py-2 font-medium">Pending Scope</SelectItem>
-                    <SelectItem value="active" className="cursor-pointer py-2 font-medium">Active Development</SelectItem>
+                    <SelectItem value="pending" className="cursor-pointer py-2 font-medium">Pending</SelectItem>
+                    <SelectItem value="active" className="cursor-pointer py-2 font-medium">Active</SelectItem>
                     <SelectItem value="completed" className="cursor-pointer py-2 font-medium">Completed</SelectItem>
                     <SelectItem value="approved" className="cursor-pointer py-2 font-medium">Approved</SelectItem>
                   </SelectContent>
@@ -358,7 +362,7 @@ export default function EditProjectPage() {
 
               <div className="space-y-2.5">
                 <Label htmlFor="deadline" className="text-sm font-semibold flex items-center gap-2">
-                  <Calendar className="h-4 w-4 text-muted-foreground" /> Explicit Boundary Date
+                  <Calendar className="h-4 w-4 text-muted-foreground" /> Deadline
                 </Label>
                 <Input 
                   id="deadline" 
@@ -371,7 +375,7 @@ export default function EditProjectPage() {
 
               <div className="space-y-2.5">
                 <Label htmlFor="price" className="text-sm font-semibold flex items-center gap-2">
-                  <DollarSign className="h-4 w-4 text-emerald-600 dark:text-emerald-500" /> Price Modification
+                  <DollarSign className="h-4 w-4 text-emerald-600 dark:text-emerald-500" /> Project Value
                 </Label>
                 <div className="relative">
                   <span className="absolute left-3.5 top-3 text-muted-foreground/70 font-semibold">$</span>
@@ -389,10 +393,10 @@ export default function EditProjectPage() {
             </CardContent>
             <CardFooter className="bg-muted/10 border-t border-border/50 p-4 rounded-b-xl flex flex-col sm:flex-row gap-3">
               <Button type="submit" size="lg" className="w-full sm:flex-1 shadow-md font-bold" disabled={submitting}>
-                {submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <><Save className="mr-2 h-4 w-4" /> Hard Sync Update</>}
+                {submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <><Save className="mr-2 h-4 w-4" /> Save Changes</>}
               </Button>
               <Button variant="outline" size="lg" type="button" asChild className="w-full sm:w-auto bg-background" disabled={submitting}>
-                <Link href={`/projects/${project.id}`}>Cancel Operation</Link>
+                <Link href={`/projects/${project.id}`}>Cancel</Link>
               </Button>
             </CardFooter>
           </Card>

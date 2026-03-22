@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client"
 
 import { useAuth } from "@/lib/auth-context"
@@ -8,14 +9,12 @@ import { ArrowLeft, Mail, Shield, CheckCircle2, FolderKanban, Briefcase, Loader2
 import Link from "next/link"
 import { useParams, useRouter } from "next/navigation"
 import { useState, useEffect } from "react"
-import { createClient } from "@/lib/supabase/client"
 
 export default function StaffProfilePage() {
   const { user } = useAuth()
   const router = useRouter()
   const params = useParams()
   const staffId = params?.id as string
-  const supabase = createClient()
   
   const [loading, setLoading] = useState(true)
   const [staff, setStaff] = useState<any>(null)
@@ -23,26 +22,28 @@ export default function StaffProfilePage() {
   useEffect(() => {
     let mounted = true
     const fetchStaffDetails = async () => {
-      const { data } = await supabase
-        .from('profiles')
-        .select(`
-          *,
-          assignments:project_assignments (
-            projects (*)
-          )
-        `)
-        .eq('id', staffId)
-        .single()
+      try {
+        const res = await fetch(`/api/admin/profiles/${staffId}`, {
+          credentials: 'include',
+          cache: 'no-store'
+        })
         
-      if (mounted && data) {
-        setStaff(data)
+        if (res.ok) {
+          const json = await res.json()
+          if (mounted && json.profile) {
+            setStaff(json.profile)
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch staff details:", err)
+      } finally {
+        if (mounted) setLoading(false)
       }
-      setLoading(false)
     }
 
     if (user?.id) fetchStaffDetails()
     return () => { mounted = false }
-  }, [user, supabase, staffId])
+  }, [user?.id, staffId])
 
   if (loading) {
     return (
@@ -53,14 +54,14 @@ export default function StaffProfilePage() {
   }
 
   if (!staff) {
-    return <div className="p-8 text-center text-muted-foreground font-semibold">Staff Identity Block missing or inaccessible.</div>
+    return <div className="p-8 text-center text-muted-foreground font-semibold">Staff profile not found.</div>
   }
 
   const allProjects = staff.assignments?.map((a: any) => a.projects).filter(Boolean) || []
   const assignedProjects = allProjects.filter((p: any) => p.status !== "completed")
   const completedProjects = allProjects.filter((p: any) => p.status === "completed")
 
-  const jobTitle = staff.department || (staff.role === "admin" ? "Director / Overlord" : "Technical Pipeline Developer")
+  const jobTitle = staff.job_title || (staff.role === "admin" ? "Admin" : "Staff")
 
   return (
     <div className="space-y-6">
@@ -70,8 +71,8 @@ export default function StaffProfilePage() {
           <span className="sr-only">Route Back</span>
         </Button>
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">System Node Profile</h1>
-          <p className="text-muted-foreground mt-1 text-sm md:text-base font-medium">Viewing globally linked details mapping literal Database vectors.</p>
+          <h1 className="text-3xl font-bold tracking-tight">Staff Profile</h1>
+          <p className="text-muted-foreground mt-1 text-sm md:text-base font-medium">View details and assigned projects for this staff member.</p>
         </div>
       </div>
 
@@ -89,18 +90,18 @@ export default function StaffProfilePage() {
               
               <div className="w-full border-t border-border/50 mt-6 pt-6 space-y-4 text-left">
                 <div className="space-y-1">
-                  <span className="text-xs text-muted-foreground uppercase font-bold tracking-wider">Auth Credential</span>
+                  <span className="text-xs text-muted-foreground uppercase font-bold tracking-wider">Email</span>
                   <div className="flex items-center text-sm font-semibold truncate">
                     <Mail className="mr-2 h-4 w-4 text-muted-foreground" />
                     {staff.email}
                   </div>
                 </div>
                 <div className="space-y-1 pt-2 border-t border-border/50">
-                  <span className="text-xs text-muted-foreground uppercase font-bold tracking-wider">Network Privileges</span>
+                  <span className="text-xs text-muted-foreground uppercase font-bold tracking-wider">Role</span>
                   <div className="flex items-center mt-1">
                     <Badge variant={staff.role === "admin" ? "default" : "secondary"} className="capitalize tracking-wider text-[11px] px-2 py-0.5 shadow-sm font-bold">
                       <Shield className="mr-1.5 h-3 w-3" />
-                      {staff.role} Node
+                      {staff.role}
                     </Badge>
                   </div>
                 </div>
@@ -113,9 +114,9 @@ export default function StaffProfilePage() {
           <Card className="shadow-sm border-border/50">
             <CardHeader className="pb-4 border-b border-border/50 bg-muted/5">
               <CardTitle className="flex items-center gap-2 text-lg">
-                <FolderKanban className="h-5 w-5 text-primary" /> Active Assignments Pipeline
+                <FolderKanban className="h-5 w-5 text-primary" /> Active Projects
               </CardTitle>
-              <CardDescription className="font-medium text-sm">Database references currently bound to {staff.name}.</CardDescription>
+              <CardDescription className="font-medium text-sm">Projects currently assigned to {staff.name}.</CardDescription>
             </CardHeader>
             <CardContent className="pt-6">
               {assignedProjects.length > 0 ? (
@@ -135,7 +136,7 @@ export default function StaffProfilePage() {
               ) : (
                 <div className="text-center py-6 border border-dashed rounded-lg bg-muted/10 border-border/50">
                   <FolderKanban className="h-8 w-8 mx-auto mb-2 opacity-20 text-muted-foreground" />
-                  <p className="text-sm font-semibold text-muted-foreground">0 nodes linked dynamically</p>
+                  <p className="text-sm font-semibold text-muted-foreground">No active projects assigned</p>
                 </div>
               )}
             </CardContent>
@@ -145,7 +146,7 @@ export default function StaffProfilePage() {
             <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500/50"></div>
             <CardHeader className="pb-4 border-b border-border/50 bg-muted/5">
               <CardTitle className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 text-lg">
-                <CheckCircle2 className="h-5 w-5" /> Historical Completion Log
+                <CheckCircle2 className="h-5 w-5" /> Completed Projects
               </CardTitle>
             </CardHeader>
             <CardContent className="pt-6">
@@ -161,7 +162,7 @@ export default function StaffProfilePage() {
                   ))}
                 </div>
               ) : (
-                <p className="text-sm text-muted-foreground italic font-medium">Empty resolution registry</p>
+                <p className="text-sm text-muted-foreground italic font-medium">No completed projects yet.</p>
               )}
             </CardContent>
           </Card>

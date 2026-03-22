@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
-import { createClient as createAdmin } from '@supabase/supabase-js'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import { createAdminClient } from '@/lib/supabase/admin'
 
 /**
  * POST /api/create-user
@@ -38,7 +38,8 @@ export async function POST(request: Request) {
     }
 
     // Verify caller is admin via profiles table
-    const { data: callerProfile } = await supabase
+    const adminClient = createAdminClient()
+    const { data: callerProfile } = await adminClient
       .from('profiles')
       .select('role')
       .eq('id', user.id)
@@ -61,19 +62,6 @@ export async function POST(request: Request) {
     }
 
     // 3. Use service-role admin client to invite the user
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-    if (!serviceRoleKey) {
-      return NextResponse.json(
-        { error: 'SUPABASE_SERVICE_ROLE_KEY is not configured. Add it to .env.local.' },
-        { status: 500 }
-      )
-    }
-
-    const adminClient = createAdmin(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      serviceRoleKey,
-      { auth: { autoRefreshToken: false, persistSession: false } }
-    )
 
     // Build the redirect URL: /auth/callback will exchange the token, then
     // redirect to /setup-password where they set their password.

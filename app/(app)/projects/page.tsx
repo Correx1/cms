@@ -60,7 +60,7 @@ export default function ProjectsPage() {
     let mounted = true
     if (user?.id) fetchProjects()
     return () => { mounted = false }
-  }, [user, supabase])
+  }, [user?.id])
 
   const visibleProjects = projectsState.filter(p => p.title.toLowerCase().includes(searchQuery.toLowerCase()))
 
@@ -99,44 +99,49 @@ export default function ProjectsPage() {
     if (!projectToComplete) return
     setSubmitting(true)
 
-    const uploadedFilesData = []
+    const uploadedFilesData: {name: string, url: string, type: string, uploadedAt: string}[] = []
     for (const file of completionFiles) {
       const fileName = `${Date.now()}_${file.name.replace(/\s+/g, '_')}`
       const { data, error } = await supabase.storage.from('deliverables_vault').upload(`projects/${projectToComplete}/${fileName}`, file)
       if (!error && data) {
         const { data: { publicUrl } } = supabase.storage.from('deliverables_vault').getPublicUrl(data.path)
-        uploadedFilesData.push({
-          name: file.name,
-          url: publicUrl,
-          type: file.type,
-          uploadedAt: new Date().toISOString()
-        })
+        uploadedFilesData.push({ name: file.name, url: publicUrl, type: file.type, uploadedAt: new Date().toISOString() })
       }
     }
 
     const compiledLinks = completionLinks.split('\n').map(l => l.trim()).filter(Boolean)
 
-    const completionPayload = {
-      status: 'completed',
-      deliverables_summary: completionNotes,
-      deliverables_links: compiledLinks,
-      deliverables_files: uploadedFilesData
-    }
+    const res = await fetch('/api/projects/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        projectId: projectToComplete,
+        deliverables_summary: completionNotes,
+        deliverables_links: compiledLinks,
+        deliverables_files: uploadedFilesData,
+      }),
+    })
 
-    const { error } = await supabase.from('projects').update(completionPayload).eq('id', projectToComplete)
-
-    if (error) {
-      toast.error("Failed to complete project")
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      toast.error(err.error ?? 'Failed to complete project')
     } else {
-      toast.success("Project safely validated!")
+      toast.success('Project validated and completed!')
+      const completionPayload = {
+        status: 'completed',
+        deliverables_summary: completionNotes,
+        deliverables_links: compiledLinks,
+        deliverables_files: uploadedFilesData,
+      }
       setProjectsState(prev => prev.map(p => p.id === projectToComplete ? { ...p, ...completionPayload } : p))
     }
 
     setSubmitting(false)
     setCompleteModalOpen(false)
     setProjectToComplete(null)
-    setCompletionNotes("")
-    setCompletionLinks("")
+    setCompletionNotes('')
+    setCompletionLinks('')
     setCompletionFiles([])
   }
 
@@ -176,7 +181,7 @@ export default function ProjectsPage() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Projects Directory</h1>
-          <p className="text-sm md:text-base text-muted-foreground mt-1">Track and manage securely encrypted agency documents natively.</p>
+          <p className="text-sm md:text-base text-muted-foreground mt-1">View and manage all your agency projects.</p>
         </div>
         {(user?.role === "admin") && (
           <Button className="shadow-sm shadow-primary/20 w-full sm:w-auto" asChild>
@@ -199,7 +204,7 @@ export default function ProjectsPage() {
                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
                   type="search"
-                  placeholder="Search live trackers..."
+                  placeholder="Search projects..."
                   className="w-full pl-9 bg-background/50 h-9"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
@@ -313,7 +318,7 @@ export default function ProjectsPage() {
                               <>
                                 <DropdownMenuSeparator />
                                 <DropdownMenuItem onClick={() => handleDelete(project.id)} className="text-destructive font-semibold cursor-pointer">
-                                  Delete Target
+                                  Delete Project
                                 </DropdownMenuItem>
                               </>
                             )}
@@ -325,7 +330,7 @@ export default function ProjectsPage() {
                 }) : (
                   <TableRow>
                     <TableCell colSpan={6} className="h-32 text-center text-muted-foreground text-base">
-                      No matching projects tracked on Cloud.
+                      No projects found.
                     </TableCell>
                   </TableRow>
                 )}
@@ -340,7 +345,7 @@ export default function ProjectsPage() {
           <DialogHeader>
             <DialogTitle>Complete Live Project</DialogTitle>
             <DialogDescription>
-              Commit the database tracking array securely storing Deliverables physically upon completion boundaries safely.
+              Add a summary, delivery links, and any files when marking this project as complete.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
@@ -348,13 +353,13 @@ export default function ProjectsPage() {
               <Label>Work Summary <span className="text-destructive">*</span></Label>
               <textarea 
                 className="flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                placeholder="Database summary chunk..."
+                placeholder="Describe what was completed and delivered..."
                 value={completionNotes}
                 onChange={(e) => setCompletionNotes(e.target.value)}
               />
             </div>
             <div className="space-y-2">
-              <Label>Live URLs (Optional)</Label>
+              <Label>Delivery Links (one per line, optional)</Label>
               <textarea 
                 className="flex min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2"
                 placeholder="https://..."
@@ -363,13 +368,13 @@ export default function ProjectsPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Final Drop Vault</Label>
+              <Label>Deliverable Files (optional)</Label>
               <div className="border-2 border-dashed rounded-lg p-6 flex flex-col items-center justify-center text-muted-foreground bg-muted/10 relative">
                 <Input type="file" multiple className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" onChange={(e) => {
                   if (e.target.files) setCompletionFiles([...completionFiles, ...Array.from(e.target.files)])
                 }} />
                 <Upload className="h-8 w-8 mb-2 opacity-70" />
-                <p className="text-sm font-medium">Drag live deliverables mapping strictly safely</p>
+                <p className="text-sm font-medium">Drag & drop files or click to browse</p>
                 {completionFiles.length > 0 && (
                   <div className="mt-4 w-full space-y-2 text-left z-20 relative">
                      <div className="max-h-[120px] overflow-y-auto space-y-1.5 pr-2">
@@ -390,7 +395,7 @@ export default function ProjectsPage() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setCompleteModalOpen(false)} disabled={submitting}>Cancel</Button>
             <Button disabled={!completionNotes.trim() || submitting} onClick={submitCompletion}>
-              {submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : "Verify & Commit"}
+              {submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : "Mark as Complete"}
             </Button>
           </DialogFooter>
         </DialogContent>
