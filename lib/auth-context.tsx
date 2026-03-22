@@ -23,9 +23,18 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
-// Derive the dashboard path for a given role
 function dashboardPath(role: string) {
   return `/dashboard/${role}`
+}
+
+/** Call /api/ensure-profile to create the row (bypasses RLS via service role) */
+async function ensureProfile(name?: string, role?: string): Promise<void> {
+  await fetch('/api/ensure-profile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, role }),
+    credentials: 'include',
+  })
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -37,7 +46,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true
 
-    // ── Helper: load profile and return a mapped User object ──────────────────
+    // ── Helper: load profile from DB ──────────────────────────────────────────
     async function fetchProfile(userId: string, email: string): Promise<User | null> {
       const { data: profile } = await supabase
         .from("profiles")
@@ -57,11 +66,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    // ── On mount: hydrate from existing session ────────────────────────────────
+    // ── On mount: hydrate session ─────────────────────────────────────────────
     async function initializeSession() {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession()
+      const { data: { session } } = await supabase.auth.getSession()
 
       if (session?.user) {
         const mapped = await fetchProfile(session.user.id, session.user.email ?? "")
@@ -73,34 +80,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     initializeSession()
 
-    // ── React to all future auth state changes ─────────────────────────────────
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
+    // ── Auth state listener ───────────────────────────────────────────────────
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === "SIGNED_OUT") {
         setUser(null)
         router.push("/")
         return
       }
 
-      // PASSWORD_RECOVERY: user clicked a "reset password" link — send to setup-password
       if (event === "PASSWORD_RECOVERY") {
         router.push("/setup-password")
         return
       }
 
       if ((event === "SIGNED_IN" || event === "TOKEN_REFRESHED") && session?.user) {
-        const mapped = await fetchProfile(session.user.id, session.user.email ?? "")
+        const { id, email } = session.user
+        let mapped = await fetchProfile(id, email ?? "")
+
+        if (!mapped) {
+          // Profile row is missing — create it via server API (bypasses RLS)
+          await ensureProfile(
+            session.user.user_metadata?.full_name ?? session.user.user_metadata?.name,
+            session.user.user_metadata?.role
+          )
+          // Re-fetch after creation
+          mapped = await fetchProfile(id, email ?? "")
+        }
 
         if (mapped) {
           setUser(mapped)
-          // Only hard-navigate on an actual sign-in, not a silent token refresh
           if (event === "SIGNED_IN") {
             router.push(dashboardPath(mapped.role!))
           }
         } else {
-          // Profile row doesn't exist yet (e.g. manually created Supabase user)
-          // Send them to set up their password / profile first
+          // Profile could not be created (service role key missing, SQL not run)
+          // Redirect to setup-password so user can at least set a password;
+          // the setup-password page also calls ensure-profile before redirecting
           if (event === "SIGNED_IN") {
             router.push("/setup-password")
           }
@@ -120,7 +135,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider value={{ user, loading, logout }}>
-      {/* Render children immediately — individual pages handle their own loading state */}
       {children}
     </AuthContext.Provider>
   )

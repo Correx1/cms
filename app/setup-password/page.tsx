@@ -20,7 +20,7 @@ export default function SetupPasswordPage() {
   const [errorMsg, setErrorMsg] = useState("")
   const [success, setSuccess] = useState(false)
 
-  // Guard: if no active session, push back to login
+  // Guard: if there's no session, redirect back to login
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session) router.replace("/")
@@ -44,7 +44,7 @@ export default function SetupPasswordPage() {
       return
     }
 
-    // 1️⃣ Update the password in auth.users
+    // 1️⃣ Set the password
     const { error: updateError } = await supabase.auth.updateUser({ password })
     if (updateError) {
       setErrorMsg(updateError.message)
@@ -52,37 +52,34 @@ export default function SetupPasswordPage() {
       return
     }
 
-    // 2️⃣ Get current user (guaranteed to be set since we called updateUser)
+    // 2️⃣ Get current user info
     const { data: { user } } = await supabase.auth.getUser()
 
+    // 3️⃣ Ensure profile row exists — calls server API that bypasses RLS
     if (user) {
-      // 3️⃣ Upsert the profiles row — this is the critical step that was missing.
-      //    ON CONFLICT (id) DO NOTHING means we never overwrite an existing role.
-      const { error: profileError } = await supabase
-        .from("profiles")
-        .upsert(
-          {
-            id: user.id,
-            email: user.email ?? "",
-            name:
-              (user.user_metadata?.full_name as string | undefined) ??
-              (user.email?.split("@")[0] ?? "User"),
-            role: (user.user_metadata?.role as string | undefined) ?? "client",
-          },
-          { onConflict: "id", ignoreDuplicates: true }
-        )
+      const res = await fetch('/api/ensure-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: user.user_metadata?.full_name ?? user.user_metadata?.name,
+          role: user.user_metadata?.role,
+        }),
+        credentials: 'include',
+      })
 
-      if (profileError) {
-        // Non-fatal: profile may already exist. Log but continue.
-        console.warn("Profile upsert warning:", profileError.message)
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        console.error('[setup-password] ensure-profile failed:', body.error)
+        // Non-fatal for now: still attempt to redirect; auth-context will retry
       }
     }
 
-    // 4️⃣ Sign out so they complete a clean login which triggers the dashboard redirect
-    await supabase.auth.signOut()
-
+    // 4️⃣ Show success, then do a full-page redirect to dashboard
+    //    (full reload ensures auth-context re-hydrates cleanly)
     setSuccess(true)
-    setTimeout(() => router.replace("/"), 2000)
+    setTimeout(() => {
+      window.location.href = "/"
+    }, 1500)
   }
 
   return (
@@ -112,7 +109,7 @@ export default function SetupPasswordPage() {
               )}
               {success ? (
                 <div className="bg-emerald-500/10 text-emerald-500 text-sm p-3 rounded-md border border-emerald-500/20 text-center font-medium">
-                  Password set! Redirecting to login…
+                  Password set! Taking you to your dashboard…
                 </div>
               ) : (
                 <>
@@ -140,7 +137,6 @@ export default function SetupPasswordPage() {
                       className="bg-background/50 h-11"
                     />
                   </div>
-
                   <div className="pt-2">
                     <Button type="submit" className="w-full text-base h-11" disabled={loading}>
                       {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : "Save Password"}
