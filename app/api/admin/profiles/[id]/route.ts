@@ -10,7 +10,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
  * Uses the service-role key — bypasses RLS completely.
  * Verifies the calling user is an admin or the user themselves.
  */
-export async function GET(request: Request, context: { params: { id: string } }) {
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const params = await context.params;
     const profileId = params.id
