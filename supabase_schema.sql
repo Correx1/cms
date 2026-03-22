@@ -1,45 +1,47 @@
 -- ==============================================================================
--- NOPLIN CMS — FULL RESET + FRESH SCHEMA
--- Run this entire script in: Supabase Dashboard → SQL Editor → New Query
+-- NOPLIN CMS — DEFINITIVE SCHEMA (matches all frontend code exactly)
+-- Run this ENTIRE script in: Supabase Dashboard → SQL Editor → New Query
 -- ==============================================================================
 
 
 -- ==============================================================================
--- STEP 0 — WIPE EVERYTHING (auth users cascade-delete all profile rows)
+-- STEP 0 — WIPE EVERYTHING
 -- ==============================================================================
 
--- Drop all tables in dependency order
-DROP TABLE IF EXISTS public.notifications    CASCADE;
-DROP TABLE IF EXISTS public.project_files    CASCADE;
-DROP TABLE IF EXISTS public.project_staff    CASCADE;
-DROP TABLE IF EXISTS public.projects         CASCADE;
-DROP TABLE IF EXISTS public.profiles         CASCADE;
+DROP TABLE IF EXISTS public.notifications       CASCADE;
+DROP TABLE IF EXISTS public.project_assignments  CASCADE;
+DROP TABLE IF EXISTS public.project_staff        CASCADE;  -- old name
+DROP TABLE IF EXISTS public.project_files        CASCADE;  -- old table
+DROP TABLE IF EXISTS public.projects             CASCADE;
+DROP TABLE IF EXISTS public.profiles             CASCADE;
 
--- Drop helper functions + triggers
-DROP FUNCTION IF EXISTS public.get_my_role()        CASCADE;
-DROP FUNCTION IF EXISTS public.handle_new_user()    CASCADE;
-DROP FUNCTION IF EXISTS public.set_updated_at()     CASCADE;
+DROP FUNCTION IF EXISTS public.notify_on_project_status_change()  CASCADE;
+DROP FUNCTION IF EXISTS public.notify_on_project_assignment()     CASCADE;
+DROP FUNCTION IF EXISTS public.get_my_role()                      CASCADE;
+DROP FUNCTION IF EXISTS public.handle_new_user()                  CASCADE;
+DROP FUNCTION IF EXISTS public.set_updated_at()                   CASCADE;
 
 
 -- ==============================================================================
--- STEP 1 — SAFE ROLE HELPER (avoids recursive RLS infinite-loop / 500 errors)
+-- STEP 1 — HELPER: SAFE ROLE CHECKER (avoids recursive RLS → 500 errors)
+-- Must use LANGUAGE plpgsql so the function can be created BEFORE the table.
 -- ==============================================================================
--- Every admin RLS policy must use THIS function instead of a direct subquery
--- on profiles — a direct subquery causes infinite recursion → 500 errors.
 
 CREATE OR REPLACE FUNCTION public.get_my_role()
 RETURNS TEXT
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
-SECURITY DEFINER                 -- runs as owner, bypasses RLS on profiles
+SECURITY DEFINER        -- bypasses RLS on profiles, no recursion
 SET search_path = public
 AS $$
-  SELECT role FROM public.profiles WHERE id = auth.uid()
+BEGIN
+  RETURN (SELECT role FROM public.profiles WHERE id = auth.uid());
+END;
 $$;
 
 
 -- ==============================================================================
--- STEP 2 — UPDATED_AT TRIGGER FUNCTION
+-- STEP 2 — UPDATED_AT HELPER
 -- ==============================================================================
 
 CREATE OR REPLACE FUNCTION public.set_updated_at()
@@ -57,7 +59,7 @@ $$;
 -- STEP 3 — TABLES
 -- ==============================================================================
 
--- A. profiles — mirrors auth.users (one row per auth account)
+-- ── A. profiles (one row per Supabase Auth user) ──────────────────────────────
 CREATE TABLE public.profiles (
   id          UUID        PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   name        TEXT,
@@ -77,9 +79,14 @@ CREATE TRIGGER trg_profiles_updated_at
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 
--- B. projects
+-- ── B. projects ───────────────────────────────────────────────────────────────
+-- All columns actually referenced by the frontend code are included here.
+-- File metadata is stored as JSONB arrays (space-efficient on Supabase free tier).
+
 CREATE TABLE public.projects (
-  id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  -- Core fields
   title        TEXT        NOT NULL,
   details      TEXT,
   deliverables TEXT,
@@ -88,9 +95,22 @@ CREATE TABLE public.projects (
   deadline     TIMESTAMPTZ,
   client_id    UUID        REFERENCES public.profiles(id) ON DELETE SET NULL,
   price        TEXT,
-  work_summary TEXT,
-  created_at   TIMESTAMPTZ DEFAULT NOW(),
-  updated_at   TIMESTAMPTZ DEFAULT NOW()
+
+  -- Initial file attachments (admin/staff uploads at project creation)
+  -- Schema: [{id, name, url, type, uploadedAt}]
+  files        JSONB       DEFAULT '[]'::jsonb,
+
+  -- Completion / delivery fields (written when staff marks project complete)
+  deliverables_summary  TEXT,
+  deliverables_links    TEXT[]  DEFAULT '{}',
+  -- Schema: [{name, url, type, uploadedAt}]
+  deliverables_files    JSONB   DEFAULT '[]'::jsonb,
+
+  -- Client revision feedback (written when client rejects and requests changes)
+  client_feedback  TEXT,
+
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TRIGGER trg_projects_updated_at
@@ -98,29 +118,19 @@ CREATE TRIGGER trg_projects_updated_at
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 
--- C. project_staff — many-to-many: projects ↔ staff profiles
-CREATE TABLE public.project_staff (
-  project_id  UUID  REFERENCES public.projects(id) ON DELETE CASCADE,
-  staff_id    UUID  REFERENCES public.profiles(id)  ON DELETE CASCADE,
-  assigned_at TIMESTAMPTZ DEFAULT NOW(),
-  PRIMARY KEY (project_id, staff_id)
+-- ── C. project_assignments (many-to-many: projects ↔ staff/admin profiles) ───
+-- Column names match ALL frontend code exactly (user_id, not staff_id).
+
+CREATE TABLE public.project_assignments (
+  project_id   UUID  REFERENCES public.projects(id)  ON DELETE CASCADE,
+  user_id      UUID  REFERENCES public.profiles(id)  ON DELETE CASCADE,
+  assigned_at  TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (project_id, user_id)
 );
 
 
--- D. project_files — files attached to projects (stored in Supabase Storage)
-CREATE TABLE public.project_files (
-  id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id   UUID        NOT NULL REFERENCES public.projects(id) ON DELETE CASCADE,
-  file_name    TEXT        NOT NULL,
-  file_path    TEXT        NOT NULL,   -- storage object path
-  file_type    TEXT,
-  file_size    BIGINT,
-  uploaded_by  UUID        REFERENCES public.profiles(id) ON DELETE SET NULL,
-  uploaded_at  TIMESTAMPTZ DEFAULT NOW()
-);
+-- ── D. notifications ──────────────────────────────────────────────────────────
 
-
--- E. notifications
 CREATE TABLE public.notifications (
   id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id    UUID        NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
@@ -133,126 +143,102 @@ CREATE TABLE public.notifications (
 
 
 -- ==============================================================================
--- STEP 4 — ROW LEVEL SECURITY (enable on every table)
+-- STEP 4 — ENABLE ROW LEVEL SECURITY
 -- ==============================================================================
 
-ALTER TABLE public.profiles       ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.projects        ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.project_staff   ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.project_files   ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.notifications   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.profiles             ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.projects              ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.project_assignments   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.notifications         ENABLE ROW LEVEL SECURITY;
 
 
 -- ==============================================================================
 -- STEP 5 — RLS POLICIES
--- NOTE: All admin checks use public.get_my_role() to avoid recursion.
+-- All admin checks use get_my_role() to avoid the recursive-subquery 500 error.
 -- ==============================================================================
 
--- ── PROFILES ──────────────────────────────────────────────────────────────────
+-- ── profiles ──────────────────────────────────────────────────────────────────
 
--- Admins see everything
 CREATE POLICY "profiles: admin full access"
   ON public.profiles FOR ALL
   USING (public.get_my_role() = 'admin');
 
--- Every user can read their own row
+-- Every user can read their own profile row
 CREATE POLICY "profiles: read own"
   ON public.profiles FOR SELECT
   USING (auth.uid() = id);
 
--- Every user can update their own row
+-- Every user can update their own profile row
 CREATE POLICY "profiles: update own"
   ON public.profiles FOR UPDATE
   USING (auth.uid() = id);
 
 
--- ── PROJECTS ──────────────────────────────────────────────────────────────────
+-- ── projects ──────────────────────────────────────────────────────────────────
 
--- Admins: full access
 CREATE POLICY "projects: admin full access"
   ON public.projects FOR ALL
   USING (public.get_my_role() = 'admin');
 
--- Staff: see projects they are assigned to
+-- Staff: read projects they are assigned to
 CREATE POLICY "projects: staff view assigned"
   ON public.projects FOR SELECT
   USING (
     EXISTS (
-      SELECT 1 FROM public.project_staff ps
-      WHERE ps.project_id = projects.id AND ps.staff_id = auth.uid()
+      SELECT 1 FROM public.project_assignments pa
+      WHERE pa.project_id = projects.id AND pa.user_id = auth.uid()
     )
   );
 
--- Staff: update projects they are assigned to (status, deliverables)
+-- Staff: update projects they are assigned to (status, deliverables fields)
 CREATE POLICY "projects: staff update assigned"
   ON public.projects FOR UPDATE
   USING (
     EXISTS (
-      SELECT 1 FROM public.project_staff ps
-      WHERE ps.project_id = projects.id AND ps.staff_id = auth.uid()
+      SELECT 1 FROM public.project_assignments pa
+      WHERE pa.project_id = projects.id AND pa.user_id = auth.uid()
     )
   );
 
--- Clients: see their own projects
+-- Clients: read only their own projects
 CREATE POLICY "projects: client view own"
   ON public.projects FOR SELECT
   USING (client_id = auth.uid());
 
+-- Clients: update only their own projects (for client_feedback field)
+CREATE POLICY "projects: client update own"
+  ON public.projects FOR UPDATE
+  USING (client_id = auth.uid());
 
--- ── PROJECT_STAFF ─────────────────────────────────────────────────────────────
 
-CREATE POLICY "project_staff: admin full access"
-  ON public.project_staff FOR ALL
+-- ── project_assignments ───────────────────────────────────────────────────────
+
+CREATE POLICY "project_assignments: admin full access"
+  ON public.project_assignments FOR ALL
   USING (public.get_my_role() = 'admin');
 
 -- Staff: see their own assignments
-CREATE POLICY "project_staff: staff view own"
-  ON public.project_staff FOR SELECT
-  USING (staff_id = auth.uid());
+CREATE POLICY "project_assignments: staff view own"
+  ON public.project_assignments FOR SELECT
+  USING (user_id = auth.uid());
 
 
--- ── PROJECT_FILES ─────────────────────────────────────────────────────────────
-
-CREATE POLICY "project_files: admin full access"
-  ON public.project_files FOR ALL
-  USING (public.get_my_role() = 'admin');
-
--- Staff: view/upload files on assigned projects
-CREATE POLICY "project_files: staff on assigned projects"
-  ON public.project_files FOR ALL
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.project_staff ps
-      WHERE ps.project_id = project_files.project_id AND ps.staff_id = auth.uid()
-    )
-  );
-
--- Clients: view files on their own projects
-CREATE POLICY "project_files: client view own"
-  ON public.project_files FOR SELECT
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.projects p
-      WHERE p.id = project_files.project_id AND p.client_id = auth.uid()
-    )
-  );
-
-
--- ── NOTIFICATIONS ─────────────────────────────────────────────────────────────
+-- ── notifications ─────────────────────────────────────────────────────────────
 
 CREATE POLICY "notifications: admin full access"
   ON public.notifications FOR ALL
   USING (public.get_my_role() = 'admin');
 
+-- Every user owns their own notifications
 CREATE POLICY "notifications: user own"
   ON public.notifications FOR ALL
   USING (user_id = auth.uid());
 
 
 -- ==============================================================================
--- STEP 6 — AUTO-CREATE PROFILE ON NEW AUTH USER (trigger)
--- Fires whenever a user is created via Supabase Auth (admin API, magic link, etc.)
--- SECURITY DEFINER means it runs as the DB owner → bypasses RLS for the INSERT.
+-- STEP 6 — AUTO-CREATE PROFILE ON NEW AUTH USER
+-- Fires when any user is created via admin API, magic link, or invite.
+-- Reads role/name/etc. from user_metadata set by /api/create-user.
 -- ==============================================================================
 
 CREATE OR REPLACE FUNCTION public.handle_new_user()
@@ -276,7 +262,7 @@ BEGIN
     NEW.raw_user_meta_data->>'company',
     NEW.raw_user_meta_data->>'job_title'
   )
-  ON CONFLICT (id) DO NOTHING;   -- safe to re-run, never overwrites existing rows
+  ON CONFLICT (id) DO NOTHING;
   RETURN NEW;
 END;
 $$;
@@ -288,26 +274,104 @@ CREATE TRIGGER on_auth_user_created
 
 
 -- ==============================================================================
--- STEP 7 — CREATE YOUR ADMIN USER
--- After running the above, go to:
---   Supabase Dashboard → Authentication → Users → "Add user" (email + password)
--- Then run THIS to promote them to admin:
+-- STEP 7 — NOTIFICATION TRIGGERS
+-- Industry-standard: DB-side triggers ensure notifications are never missed,
+-- even if the client-side code doesn't run (offline, error, etc.).
 -- ==============================================================================
 
--- UPDATE public.profiles SET role = 'admin' WHERE email = 'your@email.com';
+-- ── 7a. Notify on project status change ──────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION public.notify_on_project_status_change()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF OLD.status IS DISTINCT FROM NEW.status THEN
+
+    -- Notify the project's client
+    IF NEW.client_id IS NOT NULL THEN
+      INSERT INTO public.notifications (user_id, type, title, message)
+      VALUES (
+        NEW.client_id,
+        CASE NEW.status
+          WHEN 'completed' THEN 'success'
+          WHEN 'approved'  THEN 'success'
+          ELSE 'alert'
+        END,
+        'Project Update: ' || NEW.title,
+        'Your project status changed to: ' || UPPER(NEW.status)
+      );
+    END IF;
+
+    -- Notify all admins (except if an admin caused this, still notify them all)
+    INSERT INTO public.notifications (user_id, type, title, message)
+    SELECT
+      p.id,
+      'system',
+      'Project Status Changed',
+      '"' || NEW.title || '" → ' || NEW.status
+    FROM public.profiles p
+    WHERE p.role = 'admin';
+
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_notify_project_status ON public.projects;
+CREATE TRIGGER trg_notify_project_status
+  AFTER UPDATE OF status ON public.projects
+  FOR EACH ROW EXECUTE FUNCTION public.notify_on_project_status_change();
+
+
+-- ── 7b. Notify newly assigned staff ──────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION public.notify_on_project_assignment()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_project_title TEXT;
+BEGIN
+  SELECT title INTO v_project_title
+  FROM public.projects WHERE id = NEW.project_id;
+
+  INSERT INTO public.notifications (user_id, type, title, message)
+  VALUES (
+    NEW.user_id,
+    'message',
+    'You have been assigned to a project',
+    'You are now assigned to: ' || COALESCE(v_project_title, 'a new project')
+  );
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_notify_assignment ON public.project_assignments;
+CREATE TRIGGER trg_notify_assignment
+  AFTER INSERT ON public.project_assignments
+  FOR EACH ROW EXECUTE FUNCTION public.notify_on_project_assignment();
 
 
 -- ==============================================================================
--- STEP 8 — STORAGE BUCKET (run separately or via dashboard)
--- ==============================================================================
--- INSERT INTO storage.buckets (id, name, public)
--- VALUES ('project-files', 'project-files', false)
--- ON CONFLICT (id) DO NOTHING;
-
-
--- ==============================================================================
--- END OF SCRIPT ✅
--- Tables: profiles, projects, project_staff, project_files, notifications
--- RLS: enabled on all tables, admin uses safe get_my_role() function
--- Trigger: auto-creates profile row on every new auth user
+-- STEP 8 — AFTER RUNNING THIS SCRIPT:
+--
+-- 1. Go to Supabase Dashboard → Authentication → Users → Add User
+--    Enter your admin email + password.
+--
+-- 2. Then run this to make yourself admin:
+--    UPDATE public.profiles SET role = 'admin' WHERE email = 'your@email.com';
+--
+-- 3. Go to Storage → New Bucket → Name: "deliverables_vault" → Public: OFF
+--    (files are accessed via signed/public URLs stored in the JSONB columns)
+--
+-- 4. Add to Supabase → Authentication → URL Configuration → Redirect URLs:
+--    http://localhost:3000/auth/callback
+--    http://localhost:3000/setup-password
+--    https://your-production-domain.com/auth/callback
+--    https://your-production-domain.com/setup-password
 -- ==============================================================================

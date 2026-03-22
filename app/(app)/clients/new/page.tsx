@@ -5,16 +5,23 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { ArrowLeft, Save } from "lucide-react"
+import { ArrowLeft, Save, Loader2 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import { useState } from "react"
+import { toast } from "sonner"
 
 export default function NewClientPage() {
   const { user } = useAuth()
   const router = useRouter()
 
+  const [name, setName]       = useState("")
+  const [email, setEmail]     = useState("")
+  const [phone, setPhone]     = useState("")
+  const [company, setCompany] = useState("")
+  const [submitting, setSubmitting] = useState(false)
+
   if (user?.role !== "admin") {
-    // Phase 1 fast-fail for unauthorized UI access
     return (
       <div className="flex flex-col items-center justify-center h-[50vh] text-center">
         <h2 className="text-2xl font-bold">Unauthorized</h2>
@@ -24,10 +31,38 @@ export default function NewClientPage() {
     )
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    // Mock save, just route back
-    router.push("/clients")
+    setSubmitting(true)
+
+    try {
+      const res = await fetch("/api/create-user", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          email,
+          name,
+          role: "client",
+          phone:   phone   || undefined,
+          company: company || undefined,
+        }),
+      })
+
+      const data = await res.json()
+
+      if (!res.ok) {
+        toast.error(data.error ?? "Failed to create client account")
+        return
+      }
+
+      toast.success(`Invite sent to ${email}! They'll receive an email to set their password.`)
+      router.push("/clients")
+    } catch {
+      toast.error("Network error — please try again.")
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -36,12 +71,13 @@ export default function NewClientPage() {
         <Button variant="ghost" size="icon" asChild>
           <Link href="/clients">
             <ArrowLeft className="h-5 w-5" />
-            <span className="sr-only">Back to Clients</span>
           </Link>
         </Button>
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Add New Client</h1>
-          <p className="text-muted-foreground mt-1">Create a new client profile in the system.</p>
+          <p className="text-muted-foreground mt-1 text-sm">
+            Creates a client account and sends them an invite email to set up their password.
+          </p>
         </div>
       </div>
 
@@ -49,46 +85,70 @@ export default function NewClientPage() {
         <form onSubmit={handleSubmit}>
           <CardHeader>
             <CardTitle>Client Information</CardTitle>
-            <CardDescription>Enter the primary contact and company details.</CardDescription>
+            <CardDescription>Enter the client&apos;s contact and company details.</CardDescription>
           </CardHeader>
+
           <CardContent className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2 col-span-2 sm:col-span-1">
                 <Label htmlFor="name">Full Name</Label>
-                <Input id="name" placeholder="E.g. Jane Doe" required className="bg-background/50" />
+                <Input
+                  id="name"
+                  placeholder="E.g. Jane Doe"
+                  required
+                  value={name}
+                  onChange={e => setName(e.target.value)}
+                  className="bg-background/50"
+                />
               </div>
               <div className="space-y-2 col-span-2 sm:col-span-1">
                 <Label htmlFor="company">Company</Label>
-                <Input id="company" placeholder="E.g. Acme Corp" required className="bg-background/50" />
+                <Input
+                  id="company"
+                  placeholder="E.g. Acme Corp"
+                  value={company}
+                  onChange={e => setCompany(e.target.value)}
+                  className="bg-background/50"
+                />
               </div>
             </div>
-            
+
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2 col-span-2 sm:col-span-1">
                 <Label htmlFor="email">Email Address</Label>
-                <Input id="email" type="email" placeholder="jane@acme.com" required className="bg-background/50" />
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="jane@acme.com"
+                  required
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  className="bg-background/50"
+                />
               </div>
               <div className="space-y-2 col-span-2 sm:col-span-1">
-                <Label htmlFor="phone">Phone Number</Label>
-                <Input id="phone" type="tel" placeholder="+1 (555) 000-0000" className="bg-background/50" />
+                <Label htmlFor="phone">Phone Number (Optional)</Label>
+                <Input
+                  id="phone"
+                  type="tel"
+                  placeholder="+1 (555) 000-0000"
+                  value={phone}
+                  onChange={e => setPhone(e.target.value)}
+                  className="bg-background/50"
+                />
               </div>
             </div>
-            
-            <div className="space-y-2">
-              <Label htmlFor="notes">Internal Notes (Optional)</Label>
-              <textarea 
-                id="notes" 
-                className="flex min-h-[80px] w-full rounded-md border border-input bg-background/50 px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                placeholder="Background information about this client..."
-              />
-            </div>
           </CardContent>
+
           <CardFooter className="flex justify-end gap-2 border-t border-border/50 pt-4">
-            <Button variant="outline" type="button" asChild>
+            <Button variant="outline" type="button" asChild disabled={submitting}>
               <Link href="/clients">Cancel</Link>
             </Button>
-            <Button type="submit">
-              <Save className="mr-2 h-4 w-4" /> Save Client
+            <Button type="submit" disabled={submitting}>
+              {submitting
+                ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                : <Save className="mr-2 h-4 w-4" />}
+              Create &amp; Send Invite
             </Button>
           </CardFooter>
         </form>
