@@ -129,7 +129,7 @@ export default function NewUserPage() {
 
             <div className="space-y-2">
               <Label htmlFor="role">Role</Label>
-              <Select required value={role} onValueChange={val => setRole(val)}>
+              <Select required value={role} onValueChange={val => setRole(val ?? role)}>
                 <SelectTrigger className="bg-background">
                   <SelectValue placeholder="Select a role..." />
                 </SelectTrigger>
