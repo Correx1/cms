@@ -23,6 +23,11 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
+// Derive the dashboard path for a given role
+function dashboardPath(role: string) {
+  return `/dashboard/${role}`
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
@@ -32,54 +37,73 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true
 
-    async function initializeSession() {
-      const { data: { session } } = await supabase.auth.getSession()
-      
-      if (session?.user) {
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", session.user.id)
-          .single()
+    // ── Helper: load profile and return a mapped User object ──────────────────
+    async function fetchProfile(userId: string, email: string): Promise<User | null> {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", userId)
+        .single()
 
-        if (mounted && profile) {
-          setUser({
-            id: session.user.id,
-            email: session.user.email || "",
-            name: profile.name,
-            role: profile.role,
-            company: profile.company,
-            jobTitle: profile.job_title
-          })
-        }
+      if (!profile) return null
+
+      return {
+        id: userId,
+        email,
+        name: profile.name ?? email,
+        role: profile.role,
+        company: profile.company,
+        jobTitle: profile.job_title,
       }
+    }
+
+    // ── On mount: hydrate from existing session ────────────────────────────────
+    async function initializeSession() {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+
+      if (session?.user) {
+        const mapped = await fetchProfile(session.user.id, session.user.email ?? "")
+        if (mounted && mapped) setUser(mapped)
+      }
+
       if (mounted) setLoading(false)
     }
 
     initializeSession()
 
-    // Listen natively to any cross-tab login/logout states or JWT refreshes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    // ── React to all future auth state changes ─────────────────────────────────
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === "SIGNED_OUT") {
         setUser(null)
         router.push("/")
-      } else if (session?.user && event === "SIGNED_IN") {
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", session.user.id)
-          .single()
+        return
+      }
 
-        if (profile) {
-          setUser({
-            id: session.user.id,
-            email: session.user.email || "",
-            name: profile.name,
-            role: profile.role,
-            company: profile.company,
-            jobTitle: profile.job_title
-          })
-          router.push(`/dashboard/${profile.role}`) // Native redirect upon successful login payload
+      // PASSWORD_RECOVERY: user clicked a "reset password" link — send to setup-password
+      if (event === "PASSWORD_RECOVERY") {
+        router.push("/setup-password")
+        return
+      }
+
+      if ((event === "SIGNED_IN" || event === "TOKEN_REFRESHED") && session?.user) {
+        const mapped = await fetchProfile(session.user.id, session.user.email ?? "")
+
+        if (mapped) {
+          setUser(mapped)
+          // Only hard-navigate on an actual sign-in, not a silent token refresh
+          if (event === "SIGNED_IN") {
+            router.push(dashboardPath(mapped.role!))
+          }
+        } else {
+          // Profile row doesn't exist yet (e.g. manually created Supabase user)
+          // Send them to set up their password / profile first
+          if (event === "SIGNED_IN") {
+            router.push("/setup-password")
+          }
         }
       }
     })
@@ -96,7 +120,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider value={{ user, loading, logout }}>
-      {!loading && children}
+      {/* Render children immediately — individual pages handle their own loading state */}
+      {children}
     </AuthContext.Provider>
   )
 }
