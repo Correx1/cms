@@ -84,10 +84,7 @@ export default function SetupPasswordPage() {
 
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center px-4 py-8 md:p-8">
-      <div className="absolute top-4 left-4 md:top-8 md:left-8 flex items-center gap-2">
-        <Image src="/logo.png" alt="Agency CRM" width={40} height={40} className="w-10 h-10 object-contain" />
-      </div>
-
+   
       <div className="w-full max-w-sm sm:max-w-md animate-in fade-in zoom-in duration-500 flex flex-col items-center">
         <div className="text-center mb-6">
           <Image src="/logo.png" alt="Agency CRM Logo" width={64} height={64} className="w-16 h-16 object-contain mx-auto mb-4" />
